@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import Markdown from "react-markdown";
+import {
+  Send, Square, Loader2, ShieldQuestion, FileText, CheckCircle2, XCircle,
+  Wrench, AlertTriangle, Ban, Sprout, KeyRound, FolderOpen,
+} from "lucide-react";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Card, CardContent } from "./ui/card";
+import { ScrollArea } from "./ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import type { StepId } from "../types";
 
 const MODEL_OPTIONS: Record<string, string[]> = {
@@ -22,6 +33,12 @@ const STEP_HINTS: Record<StepId, string> = {
   converge: "Assess implementation against artifacts; loop until Converged.",
 };
 
+const APPROVAL_MODE_HINTS: Record<string, string> = {
+  ask: "ask — every tool call requires approval",
+  "auto-edit": "auto-edit — file edits auto-approved, shell still gated",
+  "full-auto": "full-auto — no approval gates (use with care)",
+};
+
 type StreamPayload =
   | { kind: "delta"; text: string }
   | { kind: "tool_use"; name: string }
@@ -34,6 +51,7 @@ type StreamPayload =
 interface Msg {
   role: "user" | "assistant" | "system";
   text: string;
+  variant?: "info" | "success" | "error" | "warning" | "tool";
 }
 
 interface ApprovalReq {
@@ -41,6 +59,55 @@ interface ApprovalReq {
   tool: string;
   detail: string;
   preview: string | null;
+}
+
+function SystemLine({ msg }: { msg: Msg }) {
+  const styles = {
+    success: "text-primary",
+    error: "text-destructive",
+    warning: "text-warning",
+    tool: "text-muted-foreground",
+    info: "text-muted-foreground",
+  } as const;
+  const Icon =
+    msg.variant === "success" ? CheckCircle2
+    : msg.variant === "error" ? XCircle
+    : msg.variant === "warning" ? AlertTriangle
+    : msg.variant === "tool" ? Wrench
+    : CheckCircle2;
+  return (
+    <div className={`flex items-start gap-2 px-1 py-0.5 text-xs font-mono ${styles[msg.variant ?? "info"]}`}>
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="break-all">{msg.text}</span>
+    </div>
+  );
+}
+
+function ApprovalCard({ req, onAnswer }: { req: ApprovalReq; onAnswer: (id: string, ok: boolean) => void }) {
+  const isWrite = req.tool === "write_file";
+  return (
+    <Card className="border-primary/40 bg-card animate-slide-up">
+      <CardContent className="p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <ShieldQuestion className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium">Approve {req.tool}?</span>
+        </div>
+        <p className="mb-2 break-all font-mono text-xs text-muted-foreground">{req.detail}</p>
+        {req.preview && (
+          <div className="mb-3">
+            {isWrite && <p className="mb-1 text-[11px] font-medium text-muted-foreground">Diff preview</p>}
+            <pre className="max-h-56 overflow-y-auto rounded-md border border-border bg-background p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all">
+              {req.preview}
+            </pre>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => onAnswer(req.approval_id, true)}>Approve</Button>
+          <Button size="sm" variant="outline" onClick={() => onAnswer(req.approval_id, false)}>Deny</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export function ChatPanel({
@@ -77,6 +144,7 @@ export function ChatPanel({
   useEffect(() => {
     invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey);
   }, [providerId, hasKey]);
+
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -96,27 +164,22 @@ export function ChatPanel({
       } else if (p.kind === "tool_result") {
         setMessages((prev) => [
           ...prev,
-          { role: "system", text: `${p.ok ? "⚙" : "✗"} ${p.name}: ${p.detail}` },
+          { role: "system", variant: p.ok ? "tool" : "error", text: `${p.name} — ${p.detail}` },
         ]);
       } else if (p.kind === "artifact_written") {
-        setMessages((prev) => [
-          ...prev,
-          { role: "system", text: `✓ artifact written: ${p.path}` },
-        ]);
+        setMessages((prev) => [...prev, { role: "system", variant: "success", text: `artifact written: ${p.path}` }]);
       } else if (p.kind === "gate_blocked") {
-        setMessages((prev) => [...prev, { role: "system", text: `⛔ gate blocked: ${p.reason}` }]);
+        setMessages((prev) => [...prev, { role: "system", variant: "error", text: `gate blocked: ${p.reason}` }]);
         setRunning(false);
       } else if (p.kind === "error") {
-        setMessages((prev) => [...prev, { role: "system", text: `⚠ error: ${p.message}` }]);
+        setMessages((prev) => [...prev, { role: "system", variant: "error", text: `error: ${p.message}` }]);
         setRunning(false);
       } else if (p.kind === "done") {
         setRunning(false);
         onStepDone();
       }
     });
-    return () => {
-      unlisten.then((f) => f());
-    };
+    return () => { unlisten.then((f) => f()); };
   }, [onStepDone]);
 
   useEffect(() => {
@@ -126,27 +189,16 @@ export function ChatPanel({
   const [approvals, setApprovals] = useState<ApprovalReq[]>([]);
   useEffect(() => {
     const unlisten = listen<{
-      kind: string;
-      approval_id: string;
-      tool: string;
-      detail: string;
-      preview: string | null;
+      kind: string; approval_id: string; tool: string; detail: string; preview: string | null;
     }>("approval-request", (ev) => {
       if (ev.payload.kind === "request") {
         setApprovals((prev) => [
           ...prev,
-          {
-            approval_id: ev.payload.approval_id,
-            tool: ev.payload.tool,
-            detail: ev.payload.detail,
-            preview: ev.payload.preview,
-          },
+          { approval_id: ev.payload.approval_id, tool: ev.payload.tool, detail: ev.payload.detail, preview: ev.payload.preview },
         ]);
       }
     });
-    return () => {
-      unlisten.then((f) => f());
-    };
+    return () => { unlisten.then((f) => f()); };
   }, []);
 
   const answerApproval = async (id: string, approved: boolean) => {
@@ -154,7 +206,7 @@ export function ChatPanel({
     try {
       await invoke("respond_approval", { approvalId: id, approved });
     } catch (e) {
-      setMessages((prev) => [...prev, { role: "system", text: `⚠ approval response failed: ${e}` }]);
+      setMessages((prev) => [...prev, { role: "system", variant: "error", text: `approval response failed: ${e}` }]);
     }
   };
 
@@ -177,173 +229,181 @@ export function ChatPanel({
         },
       });
     } catch (e) {
-      setMessages((prev) => [...prev, { role: "system", text: `⚠ invoke failed: ${e}` }]);
+      setMessages((prev) => [...prev, { role: "system", variant: "error", text: `invoke failed: ${e}` }]);
       setRunning(false);
     }
   };
 
-  // hasKey prop reflects "any key configured" (drives setup modal);
-  // readiness requires a key for the *selected* provider.
   const ready = projectRoot && providerHasKey;
+  const gateBlocked = gate != null && !gate.allowed;
 
   return (
-    <section className="flex flex-1 flex-col min-w-0">
-      <header className="flex items-center justify-between border-b border-edge px-5 py-3">
-        <div>
+    <section className="flex h-full flex-1 flex-col min-w-0">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="min-w-0">
           <h1 className="text-sm font-medium capitalize">{step}</h1>
-          <p className="text-xs text-ink-faint">{STEP_HINTS[step]}</p>
+          <p className="truncate text-xs text-muted-foreground">{STEP_HINTS[step]}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
           {featureSlug && (
-            <span className="rounded bg-surface-overlay px-2 py-1 font-mono text-xs text-ink-dim">
-              {featureSlug}
-            </span>
+            <Badge variant="secondary" className="font-mono">{featureSlug}</Badge>
           )}
-          <select
+          <Select
             value={providerId}
-            onChange={(e) => {
-              const p = e.target.value;
-              setProviderId(p);
-              setModel(MODEL_OPTIONS[p][0]);
-            }}
-            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none"
+            onValueChange={(p) => { setProviderId(p); setModel(MODEL_OPTIONS[p][0]); }}
           >
-            <option value="anthropic">anthropic</option>
-            <option value="openai">openai</option>
-            <option value="openrouter">openrouter</option>
-            <option value="qwen">qwen</option>
-          </select>
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none font-mono"
-          >
-            {MODEL_OPTIONS[providerId].map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-          <select
-            value={approvalMode}
-            onChange={(e) => setApprovalMode(e.target.value)}
-            title="Approval mode: ask = every tool, auto-edit = shell only, full-auto = none"
-            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none"
-          >
-            <option value="ask">ask</option>
-            <option value="auto-edit">auto-edit</option>
-            <option value="full-auto">full-auto</option>
-          </select>
+            <SelectTrigger className="w-[104px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="anthropic">anthropic</SelectItem>
+              <SelectItem value="openai">openai</SelectItem>
+              <SelectItem value="openrouter">openrouter</SelectItem>
+              <SelectItem value="qwen">qwen</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={model} onValueChange={setModel}>
+            <SelectTrigger className="w-[170px] font-mono"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {MODEL_OPTIONS[providerId].map((m) => (
+                <SelectItem key={m} value={m} className="font-mono">{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div>
+                <Select value={approvalMode} onValueChange={setApprovalMode}>
+                  <SelectTrigger className="w-[104px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ask">ask</SelectItem>
+                    <SelectItem value="auto-edit">auto-edit</SelectItem>
+                    <SelectItem value="full-auto">full-auto</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>{APPROVAL_MODE_HINTS[approvalMode]}</TooltipContent>
+          </Tooltip>
         </div>
       </header>
 
-      {gate && !gate.allowed && (
-        <div className="border-b border-red-400/30 bg-red-400/5 px-5 py-2 text-xs text-red-300">
-          ⛔ {step} is blocked: {gate.reason}
+      {gateBlocked && (
+        <div className="flex shrink-0 items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+          <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{step} is blocked — {gate!.reason}</span>
         </div>
       )}
       {gate?.allowed && gate.needs_confirmation && (
-        <div className="border-b border-yellow-400/30 bg-yellow-400/5 px-5 py-2 text-xs text-yellow-200/90">
-          ⚠ {gate.reason}
+        <div className="flex shrink-0 items-start gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{gate.reason}</span>
         </div>
       )}
-      <div className="flex-1 overflow-y-auto px-5 py-6">
-        <div className="mx-auto max-w-2xl space-y-4">
+
+      <ScrollArea className="flex-1">
+        <div className="mx-auto max-w-2xl space-y-3 px-4 py-5">
           {messages.length === 0 && (
-            <div className="text-center text-ink-faint text-sm">
-              <p className="mb-2 text-4xl">🌱</p>
-              {!projectRoot && <p>Open a project folder in the sidebar to begin.</p>}
+            <div className="flex flex-col items-center gap-3 py-16 text-center">
+              {!projectRoot && (
+                <>
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                    <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No project open</p>
+                  <p className="max-w-xs text-xs text-muted-foreground">
+                    Open a project folder in the sidebar to begin the spec-driven pipeline.
+                  </p>
+                </>
+              )}
               {projectRoot && !providerHasKey && (
-                <p>No key stored for {providerId} — open Provider settings in the sidebar.</p>
+                <>
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                    <KeyRound className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No API key for {providerId}</p>
+                  <p className="max-w-xs text-xs text-muted-foreground">
+                    Open provider settings in the sidebar to store a key, or set the environment variable.
+                  </p>
+                </>
               )}
               {ready && (
-                <p>
-                  Describe the input for{" "}
-                  <code className="rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-xs text-accent">
-                    /speckit.{step}
-                  </code>{" "}
-                  below.
-                </p>
+                <>
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                    <Sprout className="h-5 w-5 text-primary" />
+                  </div>
+                  <p className="text-sm font-medium capitalize">Ready for {step}</p>
+                  <p className="max-w-xs text-xs text-muted-foreground">
+                    Describe the input for{" "}
+                    <code className="rounded bg-secondary px-1 py-0.5 font-mono text-[11px] text-primary">
+                      /speckit.{step}
+                    </code>{" "}
+                    in the composer below. ⌘↵ or Ctrl+Enter to run.
+                  </p>
+                </>
               )}
             </div>
           )}
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={
-                m.role === "user"
-                  ? "ml-12 rounded-xl bg-surface-overlay px-4 py-3 text-sm"
-                  : m.role === "assistant"
-                    ? "mr-12 px-1 py-1 text-sm whitespace-pre-wrap"
-                    : "px-1 py-1 font-mono text-xs text-ink-faint"
-              }
-            >
-              {m.text}
-            </div>
-          ))}
-          {running && <div className="text-xs text-ink-faint animate-pulse">streaming…</div>}
-          {approvals.map((a) => (
-            <div key={a.approval_id} className="rounded-xl border border-accent/50 bg-surface-overlay px-4 py-3">
-              <p className="text-sm mb-1">
-                Approve <code className="font-mono text-xs text-accent">{a.tool}</code>?
-              </p>
-              <p className="text-xs text-ink-dim font-mono mb-2 break-all">{a.detail}</p>
-              {a.preview && (
-                <pre className="mb-3 max-h-48 overflow-y-auto rounded-lg bg-surface px-3 py-2 text-[11px] font-mono text-ink-dim whitespace-pre-wrap break-all">
-                  {a.preview}
-                </pre>
-              )}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => answerApproval(a.approval_id, true)}
-                  className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent-hover"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => answerApproval(a.approval_id, false)}
-                  className="rounded-lg border border-edge px-3 py-1 text-xs text-ink-dim hover:text-ink"
-                >
-                  Deny
-                </button>
+          {messages.map((m, i) =>
+            m.role === "system" ? (
+              <SystemLine key={i} msg={m} />
+            ) : m.role === "user" ? (
+              <div key={i} className="ml-12 rounded-lg bg-secondary px-3.5 py-2.5 text-sm animate-fade-in">
+                {m.text}
               </div>
+            ) : (
+              <div key={i} className="mr-8 artifact-markdown animate-fade-in">
+                <Markdown>{m.text}</Markdown>
+              </div>
+            )
+          )}
+          {running && (
+            <div className="flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              streaming…
             </div>
+          )}
+          {approvals.map((a) => (
+            <ApprovalCard key={a.approval_id} req={a} onAnswer={answerApproval} />
           ))}
           <div ref={bottomRef} />
         </div>
-      </div>
+      </ScrollArea>
 
-      <footer className="border-t border-edge px-5 py-4">
+      <footer className="shrink-0 border-t border-border px-4 py-3">
         <div className="mx-auto max-w-2xl">
-          <div className="rounded-xl border border-edge bg-surface-raised focus-within:border-accent">
+          <div className="rounded-lg border border-input bg-card transition-colors focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-ring/30">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               rows={3}
-              disabled={!ready || running}
+              disabled={!ready || running || gateBlocked}
               placeholder={
-                ready ? `Describe the input for /speckit.${step}…` : "Open a project and configure a provider"
+                gateBlocked
+                  ? `${step} is blocked — resolve the prerequisite first`
+                  : ready
+                    ? `Describe the input for /speckit.${step}…`
+                    : "Open a project and configure a provider"
               }
-              className="w-full resize-none bg-transparent px-4 py-3 text-sm outline-none placeholder:text-ink-faint disabled:opacity-50"
+              className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run();
               }}
             />
-            <div className="flex items-center justify-between px-3 pb-2">
-              <span className="text-xs text-ink-faint">⌘↵ to run</span>
+            <div className="flex items-center justify-between px-2.5 pb-2">
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
+                <FileText className="h-3 w-3" /> Ctrl+Enter to run
+              </span>
               {running ? (
-                <button
+                <Button
+                  variant="destructive"
+                  size="sm"
                   onClick={() => invoke("cancel_run").catch(() => {})}
-                  className="rounded-lg border border-red-400/50 px-4 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-400/10"
                 >
-                  Stop
-                </button>
+                  <Square className="h-3 w-3" /> Stop
+                </Button>
               ) : (
-                <button
-                  onClick={run}
-                  disabled={!ready || !input.trim() || (gate ? !gate.allowed : false)}
-                  className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
-                >
-                  Run
-                </button>
+                <Button size="sm" disabled={!ready || !input.trim() || gateBlocked} onClick={run}>
+                  <Send className="h-3 w-3" /> Run
+                </Button>
               )}
             </div>
           </div>

@@ -2,11 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  background: #1a1a18;
-  color: #e8e6e0;
+@layer base {
+  :root {
+    /* aix warm-dark theme — shadcn token system (HSL channels) */
+    --background: 60 2.7% 10.2%;      /* #1a1a18 */
+    --foreground: 40 9% 90%;          /* #e8e6e0 */
+    --card: 60 3.4% 13.5%;            /* #232320 */
+    --card-foreground: 40 9% 90%;
+    --popover: 60 3.4% 13.5%;
+    --popover-foreground: 40 9% 90%;
+    --primary: 17 63% 59%;            /* #d97757 warm orange */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 60 4.5% 17%;         /* #2c2c28 */
+    --secondary-foreground: 40 9% 90%;
+    --muted: 60 4.5% 17%;
+    --muted-foreground: 45 4% 64%;    /* #a3a099 */
+    --accent: 60 4.5% 17%;
+    --accent-foreground: 40 9% 90%;
+    --destructive: 0 62% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 38 62% 58%;
+    --warning-foreground: 30 20% 10%;
+    --border: 52 5.6% 21.5%;          /* #3a3a34 */
+    --input: 52 5.6% 21.5%;
+    --ring: 17 63% 59%;
+    --radius: 0.625rem;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 1px;
+  }
 }

@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Markdown from "react-markdown";
+import {
+  Pencil, Eye, Copy, Check, FileText, ClipboardCheck, FolderOpen, Loader2,
+} from "lucide-react";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Checkbox } from "./ui/checkbox";
+import { Progress } from "./ui/progress";
+import { ScrollArea } from "./ui/scroll-area";
+import { toast } from "sonner";
+import { cn } from "../lib/utils";
 import type { StepId } from "../types";
 
 const ARTIFACT_FOR_STEP: Partial<Record<StepId, string>> = {
@@ -21,6 +31,18 @@ const TABS = [
   { rel: "tasks.md", label: "tasks" },
 ];
 
+function EmptyState({ icon: Icon, title, body }: { icon: typeof FileText; title: string; body: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </div>
+      <p className="text-xs font-medium">{title}</p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">{body}</p>
+    </div>
+  );
+}
+
 export function ArtifactPanel({
   step,
   projectRoot,
@@ -38,6 +60,7 @@ export function ArtifactPanel({
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const forStep = ARTIFACT_FOR_STEP[step];
@@ -65,8 +88,8 @@ export function ArtifactPanel({
     load();
   }, [load, refreshToken]);
 
-  const save = async () => {
-    if (!projectRoot || !rel || content === null) return;
+  const save = useCallback(async () => {
+    if (!projectRoot || !rel || content === null || !dirty) return;
     setSaving(true);
     try {
       await invoke("write_artifact", {
@@ -76,128 +99,193 @@ export function ArtifactPanel({
         content,
       });
       setDirty(false);
+      toast.success("Artifact saved", { description: rel });
     } catch (e) {
       setError(String(e));
+      toast.error("Save failed", { description: String(e) });
     } finally {
       setSaving(false);
     }
+  }, [projectRoot, featureSlug, rel, content, dirty]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        save();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [save]);
+
+  const copyContent = async () => {
+    if (content === null) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable */ }
   };
 
+  const isChecklist = rel?.includes("checklists/") ?? false;
+  const checkItems = isChecklist && content !== null
+    ? content.split("\n").map((line, i) => {
+        const m = line.match(/^(\s*[-*]\s*)\[( |x|X)\]\s*(.*)$/);
+        return m ? { line: i, checked: m[2].toLowerCase() === "x", text: m[3] } : null;
+      }).filter((x): x is { line: number; checked: boolean; text: string } => x !== null)
+    : [];
+  const checkedCount = checkItems.filter((c) => c.checked).length;
+
   return (
-    <aside className="flex w-[28rem] flex-col border-l border-edge bg-surface-raised">
-      <header className="flex items-center gap-1 border-b border-edge px-3 py-2">
+    <aside className="flex h-full flex-col bg-card/30">
+      <header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border px-2">
         {TABS.map((t) => (
           <button
             key={t.rel}
             onClick={() => setRel(t.rel)}
-            className={`rounded px-2 py-1 text-xs font-mono ${
-              rel === t.rel ? "bg-surface-overlay text-ink" : "text-ink-faint hover:text-ink"
-            }`}
+            className={cn(
+              "rounded px-2.5 py-1 font-mono text-xs transition-colors",
+              rel === t.rel
+                ? "bg-secondary text-foreground"
+                : "text-muted-foreground/70 hover:text-foreground"
+            )}
           >
             {t.label}
           </button>
         ))}
         <span className="flex-1" />
-        {featureSlug && (
-          <span className="truncate max-w-32 font-mono text-[10px] text-ink-faint">{featureSlug}</span>
-        )}
-        {content !== null && !rel?.includes("checklists/") && (
-          <button
-            onClick={() => setEditing((v) => !v)}
-            className="rounded border border-edge px-2 py-1 text-xs text-ink-dim hover:text-ink"
-          >
-            {editing ? "Preview" : "Edit"}
-          </button>
-        )}
-        {dirty && editing && (
-          <button
-            onClick={save}
-            disabled={saving}
-            className="rounded bg-accent px-2 py-1 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-40"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        )}
-      </header>
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {!projectRoot ? (
-          <p className="px-4 py-4 text-sm text-ink-faint">No project open.</p>
-        ) : content !== null && rel?.includes("checklists/") ? (
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            <p className="text-[10px] text-ink-faint mb-2 uppercase tracking-wide">
-              Reviewer checklist — only you can flip these
-            </p>
-            {content.split("\n").map((line, i) => {
-              const m = line.match(/^(\s*[-*]\s*)\[( |x|X)\]\s*(.*)$/);
-              if (!m) {
-                return line.trim() ? (
-                  <p key={i} className="text-xs text-ink-faint leading-relaxed whitespace-pre-wrap">{line}</p>
-                ) : (
-                  <div key={i} className="h-2" />
-                );
-              }
-              const checked = m[2].toLowerCase() === "x";
-              return (
-                <label key={i} className="flex items-start gap-2 py-1 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={async (e) => {
-                      try {
-                        await invoke("flip_checklist_item", {
-                          projectRoot,
-                          featureSlug,
-                          relPath: rel,
-                          lineIndex: i,
-                          checked: e.target.checked,
-                        });
-                        await load();
-                      } catch (err) {
-                        setError(String(err));
-                      }
-                    }}
-                    className="mt-0.5 accent-[#d97757]"
-                  />
-                  <span className={`text-xs leading-relaxed ${checked ? "text-ink-faint line-through" : "text-ink-dim"}`}>
-                    {m[3]}
-                  </span>
-                </label>
-              );
-            })}
-            <div className="mt-3 flex justify-end">
-              <button
-                onClick={() => setRel("spec.md")}
-                className="text-[10px] text-ink-faint hover:text-ink"
+        {content !== null && (
+          <>
+            <Button variant="ghost" size="icon" className="h-6 w-6" title="Copy content" onClick={copyContent}>
+              {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+            </Button>
+            {!isChecklist && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                title={editing ? "Preview" : "Edit"}
+                onClick={() => setEditing((v) => !v)}
               >
-                ← back to artifacts
-              </button>
+                {editing ? <Eye className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+              </Button>
+            )}
+          </>
+        )}
+        {editing && (
+          <Button
+            size="sm"
+            variant={dirty ? "default" : "secondary"}
+            className="h-6 px-2 text-[11px]"
+            disabled={!dirty || saving}
+            onClick={save}
+          >
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+          </Button>
+        )}
+        {dirty && <Badge variant="warning" className="px-1.5 text-[9px]">unsaved</Badge>}
+      </header>
+
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {!projectRoot ? (
+          <EmptyState
+            icon={FolderOpen}
+            title="No project open"
+            body="Open a project folder to view its spec-driven artifacts here."
+          />
+        ) : content !== null && isChecklist ? (
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="shrink-0 border-b border-border/50 px-4 py-2.5">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <ClipboardCheck className="h-3 w-3" />
+                  Reviewer checklist — only you can flip these
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {checkedCount}/{checkItems.length}
+                </span>
+              </div>
+              <Progress value={checkItems.length > 0 ? (checkedCount / checkItems.length) * 100 : 0} />
             </div>
+            <ScrollArea className="flex-1 px-4 py-3">
+              {content.split("\n").map((line, i) => {
+                const m = line.match(/^(\s*[-*]\s*)\[( |x|X)\]\s*(.*)$/);
+                if (!m) {
+                  return line.trim() ? (
+                    <p key={i} className="whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">{line}</p>
+                  ) : (
+                    <div key={i} className="h-1.5" />
+                  );
+                }
+                const checked = m[2].toLowerCase() === "x";
+                return (
+                  <label key={i} className="group flex cursor-pointer items-start gap-2.5 rounded px-1 py-1 transition-colors hover:bg-secondary/50">
+                    <Checkbox
+                      checked={checked}
+                      className="mt-0.5"
+                      onCheckedChange={async (v) => {
+                        try {
+                          await invoke("flip_checklist_item", {
+                            projectRoot,
+                            featureSlug,
+                            relPath: rel,
+                            lineIndex: i,
+                            checked: v === true,
+                          });
+                          await load();
+                        } catch (err) {
+                          toast.error("Flip failed", { description: String(err) });
+                        }
+                      }}
+                    />
+                    <span className={cn("text-xs leading-relaxed", checked ? "text-muted-foreground/70 line-through" : "text-foreground/85")}>
+                      {m[3]}
+                    </span>
+                  </label>
+                );
+              })}
+              <div className="mt-4 flex justify-end pb-2">
+                <Button variant="ghost" size="sm" className="text-[11px]" onClick={() => setRel("spec.md")}>
+                  ← back to artifacts
+                </Button>
+              </div>
+            </ScrollArea>
           </div>
         ) : content !== null && editing ? (
-          <textarea
-            value={content}
-            onChange={(e) => {
-              setContent(e.target.value);
-              setDirty(true);
-            }}
-            spellCheck={false}
-            className="flex-1 resize-none bg-transparent px-4 py-3 font-mono text-xs leading-relaxed text-ink-dim outline-none"
-          />
+          <ScrollArea className="flex-1">
+            <textarea
+              value={content}
+              onChange={(e) => {
+                setContent(e.target.value);
+                setDirty(true);
+              }}
+              spellCheck={false}
+              className="min-h-full w-full resize-none bg-transparent px-4 py-3 font-mono text-xs leading-relaxed text-foreground/85 outline-none"
+            />
+          </ScrollArea>
         ) : content !== null ? (
-          <div className="flex-1 overflow-y-auto px-4 py-3 artifact-markdown">
-            <Markdown>{content}</Markdown>
-          </div>
+          <ScrollArea className="flex-1">
+            <div className="px-4 py-3 artifact-markdown">
+              <Markdown>{content}</Markdown>
+            </div>
+          </ScrollArea>
         ) : (
-          <div className="px-4 py-4 text-xs text-ink-faint">
-            {error?.includes("no such file") || error?.includes("No such file") || error?.includes("no feature") ? (
-              <p>
-                <code className="font-mono">{rel}</code> doesn't exist yet — it will appear after the{" "}
-                {rel === "spec.md" ? "specify" : rel === "plan.md" ? "plan" : "tasks"} step runs.
-              </p>
-            ) : (
-              <p className="text-red-400/80 break-all">{error ?? "loading…"}</p>
-            )}
-          </div>
+          error?.includes("no such file") || error?.includes("No such file") || error?.includes("no feature") ? (
+            <EmptyState
+              icon={FileText}
+              title={`${rel} doesn't exist yet`}
+              body={`It will appear here after the ${
+                rel === "spec.md" ? "specify" : rel === "plan.md" ? "plan" : "tasks"
+              } step runs.`}
+            />
+          ) : error ? (
+            <EmptyState icon={FileText} title="Couldn't load artifact" body={error} />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )
         )}
       </div>
     </aside>

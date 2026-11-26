@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Toaster, toast } from "sonner";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ProviderSetup } from "./components/ProviderSetup";
 import type { PipelineState, StepId } from "./types";
+import { addRecent, getLastProject } from "./lib/recents";
 
 export function App() {
   const [activeStep, setActiveStep] = useState<StepId>("specify");
@@ -14,26 +17,37 @@ export function App() {
   const [hasKey, setHasKey] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [scanError, setScanError] = useState<string | null>(null);
 
-  const refreshPipeline = useCallback(async (root: string) => {
-    try {
-      const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
-      setPipeline(state);
-      if (state.features.length > 0 && !activeFeature) {
-        setActiveFeature(state.features[state.features.length - 1].slug);
+  const refreshPipeline = useCallback(
+    async (root: string) => {
+      try {
+        const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
+        setPipeline(state);
+        if (state.features.length > 0 && !activeFeature) {
+          setActiveFeature(state.features[state.features.length - 1].slug);
+        }
+      } catch (e) {
+        toast.error("Project scan failed", { description: String(e) });
       }
-      setScanError(null);
-    } catch (e) {
-      setScanError(String(e));
-    }
-  }, [activeFeature]);
+    },
+    [activeFeature]
+  );
 
   useEffect(() => {
-    invoke<boolean>("has_provider_key", { providerId: "anthropic" }).then((ok) => {
-      setHasKey(ok);
-      if (!ok) setShowSetup(true);
-    });
+    invoke<boolean>("has_provider_key", { providerId: "anthropic" })
+      .then((ok) => {
+        setHasKey(ok);
+        if (!ok) setShowSetup(true);
+      })
+      .catch(() => setShowSetup(true));
+    const last = getLastProject();
+    if (last) setProjectRoot(last);
+  }, []);
+
+  const openProject = useCallback((path: string) => {
+    addRecent(path);
+    setActiveFeature(null);
+    setProjectRoot(path);
   }, []);
 
   useEffect(() => {
@@ -41,51 +55,62 @@ export function App() {
   }, [projectRoot, refreshPipeline]);
 
   return (
-    <div className="flex h-full bg-surface text-ink">
-      <Sidebar
-        activeStep={activeStep}
-        onSelectStep={setActiveStep}
-        projectRoot={projectRoot}
-        onOpenProject={setProjectRoot}
-        pipeline={pipeline}
-        activeFeature={activeFeature}
-        onSelectFeature={setActiveFeature}
-        onOpenSetup={() => setShowSetup(true)}
-      />
-      <main className="flex flex-1 min-w-0">
-        <ChatPanel
-          step={activeStep}
-          projectRoot={projectRoot}
-          featureSlug={activeFeature}
-          hasKey={hasKey}
-          onStepDone={() => {
-            if (projectRoot) refreshPipeline(projectRoot);
-            setRefreshToken((t) => t + 1);
-          }}
-        />
-        <ArtifactPanel
-          step={activeStep}
-          projectRoot={projectRoot}
-          featureSlug={activeFeature}
-          refreshToken={refreshToken}
-        />
-      </main>
-      {scanError && (
-        <div className="fixed bottom-4 left-64 right-auto z-40 max-w-md rounded-xl border border-red-400/40 bg-surface-raised px-4 py-3 text-xs text-red-300 shadow-lg">
-          <div className="flex items-start justify-between gap-3">
-            <span>Project scan failed: {scanError}</span>
-            <button onClick={() => setScanError(null)} className="text-ink-faint hover:text-ink">✕</button>
-          </div>
-        </div>
-      )}
-      {showSetup && (
-        <ProviderSetup
-          onDone={() => {
-            setShowSetup(false);
-            setHasKey(true);
-          }}
-        />
-      )}
-    </div>
+    <Tooltip0>
+      <div className="flex h-full bg-background text-foreground">
+        <PanelGroup direction="horizontal" autoSaveId="aix-layout">
+          <Panel defaultSize={18} minSize={14} maxSize={28}>
+            <Sidebar
+              activeStep={activeStep}
+              onSelectStep={setActiveStep}
+              projectRoot={projectRoot}
+              onOpenProject={openProject}
+              pipeline={pipeline}
+              activeFeature={activeFeature}
+              onSelectFeature={setActiveFeature}
+              onOpenSetup={() => setShowSetup(true)}
+            />
+          </Panel>
+          <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40 data-[resize-handle-state=drag]:bg-primary" />
+          <Panel defaultSize={52} minSize={32}>
+            <ChatPanel
+              step={activeStep}
+              projectRoot={projectRoot}
+              featureSlug={activeFeature}
+              hasKey={hasKey}
+              onStepDone={() => {
+                if (projectRoot) refreshPipeline(projectRoot);
+                setRefreshToken((t) => t + 1);
+              }}
+            />
+          </Panel>
+          <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40 data-[resize-handle-state=drag]:bg-primary" />
+          <Panel defaultSize={30} minSize={20} maxSize={45}>
+            <ArtifactPanel
+              step={activeStep}
+              projectRoot={projectRoot}
+              featureSlug={activeFeature}
+              refreshToken={refreshToken}
+            />
+          </Panel>
+        </PanelGroup>
+        {showSetup && (
+          <ProviderSetup
+            onDone={() => {
+              setShowSetup(false);
+              setHasKey(true);
+            }}
+          />
+        )}
+        <Toaster theme="dark" position="bottom-right" toastOptions={{
+          style: { background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" },
+        }} />
+      </div>
+    </Tooltip0>
   );
+}
+
+// lightweight wrapper so tooltips work app-wide without circular imports
+import { TooltipProvider } from "./components/ui/tooltip";
+function Tooltip0({ children }: { children: React.ReactNode }) {
+  return <TooltipProvider delayDuration={300}>{children}</TooltipProvider>;
 }
