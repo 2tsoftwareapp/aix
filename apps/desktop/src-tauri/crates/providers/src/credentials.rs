@@ -23,16 +23,51 @@ pub fn store(provider_id: &str, secret: &str) -> Result<String, CredentialError>
     Ok(key_ref)
 }
 
+/// Env var checked as a fallback when the keychain has no entry. This exists for
+/// headless Linux (no secret-service), CI, and dev shells — the keychain remains
+/// the primary store. Never log the return value.
+fn env_fallback(provider_id: &str) -> Option<String> {
+    let var = format!("{}_API_KEY", provider_id.to_uppercase());
+    std::env::var(&var).ok().filter(|v| !v.trim().is_empty())
+}
+
 /// Retrieve a secret for use in an Authorization header. Never log the return value.
 pub fn retrieve(provider_id: &str) -> Result<String, CredentialError> {
     let entry = keyring::Entry::new(SERVICE_PREFIX, provider_id)
-        .map_err(|e| CredentialError::Keychain(e.to_string()))?;
-    entry
-        .get_password()
-        .map_err(|e| match e {
+        .map_err(|e| CredentialError::Keychain(e.to_string()));
+    let keychain_result = entry.and_then(|e| {
+        e.get_password().map_err(|err| match err {
             keyring::Error::NoEntry => CredentialError::Missing(provider_id.to_string()),
             other => CredentialError::Keychain(other.to_string()),
         })
+    });
+    match keychain_result {
+        Ok(secret) => Ok(secret),
+        Err(e) => env_fallback(provider_id).ok_or(e),
+    }
+}
+
+/// True when a key is retrievable from either keychain or env fallback.
+pub fn available(provider_id: &str) -> bool {
+    retrieve(provider_id).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn env_fallback_reads_uppercased_provider_var() {
+        std::env::set_var("TESTPROVIDER_API_KEY", "sk-test-123");
+        assert_eq!(super::env_fallback("testprovider"), Some("sk-test-123".into()));
+        std::env::remove_var("TESTPROVIDER_API_KEY");
+        assert_eq!(super::env_fallback("testprovider"), None);
+    }
+
+    #[test]
+    fn env_fallback_ignores_empty() {
+        std::env::set_var("EMPTYPROV_API_KEY", "   ");
+        assert_eq!(super::env_fallback("emptyprov"), None);
+        std::env::remove_var("EMPTYPROV_API_KEY");
+    }
 }
 
 pub fn delete(provider_id: &str) -> Result<(), CredentialError> {

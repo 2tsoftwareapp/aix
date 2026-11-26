@@ -539,6 +539,28 @@ pub fn write_artifact(
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// Reviewer-only checkbox flip on a checklist artifact. This is the sole path
+/// by which checklist items become checked — agents cannot reach it through any
+/// tool, and their prose approvals are stripped at the write boundary.
+#[tauri::command]
+pub fn flip_checklist_item(
+    project_root: String,
+    feature_slug: String,
+    rel_path: String,
+    line_index: usize,
+    checked: bool,
+) -> Result<(), String> {
+    let root = PathBuf::from(&project_root);
+    let base = root.join("specs").join(&feature_slug);
+    let path = executor::resolve_scoped(&base, &rel_path).map_err(|e| e.to_string())?;
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let flipped = speckit_core::runner::flip_checkbox(&content, line_index, checked)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&path, flipped).map_err(|e| e.to_string())?;
+    executor::audit_append(&root, "reviewer_checkbox_flip", &format!("{rel_path}:{line_index} → {checked}"), true);
+    Ok(())
+}
+
 fn summarize_tool_call(call: &providers::ToolCall) -> String {
     match call.name.as_str() {
         "write_file" => format!(

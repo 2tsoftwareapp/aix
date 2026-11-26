@@ -112,6 +112,57 @@ export function ArtifactPanel({
       <div className="flex-1 overflow-hidden flex flex-col">
         {!projectRoot ? (
           <p className="px-4 py-4 text-sm text-ink-faint">No project open.</p>
+        ) : content !== null && rel?.includes("checklists/") ? (
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <p className="text-[10px] text-ink-faint mb-2 uppercase tracking-wide">
+              Reviewer checklist — only you can flip these
+            </p>
+            {content.split("\n").map((line, i) => {
+              const m = line.match(/^(\s*[-*]\s*)\[( |x|X)\]\s*(.*)$/);
+              if (!m) {
+                return line.trim() ? (
+                  <p key={i} className="text-xs text-ink-faint leading-relaxed whitespace-pre-wrap">{line}</p>
+                ) : (
+                  <div key={i} className="h-2" />
+                );
+              }
+              const checked = m[2].toLowerCase() === "x";
+              return (
+                <label key={i} className="flex items-start gap-2 py-1 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={async (e) => {
+                      try {
+                        await invoke("flip_checklist_item", {
+                          projectRoot,
+                          featureSlug,
+                          relPath: rel,
+                          lineIndex: i,
+                          checked: e.target.checked,
+                        });
+                        await load();
+                      } catch (err) {
+                        setError(String(err));
+                      }
+                    }}
+                    className="mt-0.5 accent-[#d97757]"
+                  />
+                  <span className={`text-xs leading-relaxed ${checked ? "text-ink-faint line-through" : "text-ink-dim"}`}>
+                    {m[3]}
+                  </span>
+                </label>
+              );
+            })}
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() => setRel("spec.md")}
+                className="text-[10px] text-ink-faint hover:text-ink"
+              >
+                ← back to artifacts
+              </button>
+            </div>
+          </div>
         ) : content !== null ? (
           <textarea
             value={content}
