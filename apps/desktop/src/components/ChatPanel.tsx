@@ -39,6 +39,7 @@ interface ApprovalReq {
   approval_id: string;
   tool: string;
   detail: string;
+  preview: string | null;
 }
 
 export function ChatPanel({
@@ -113,17 +114,25 @@ export function ChatPanel({
 
   const [approvals, setApprovals] = useState<ApprovalReq[]>([]);
   useEffect(() => {
-    const unlisten = listen<{ kind: string; approval_id: string; tool: string; detail: string }>(
-      "approval-request",
-      (ev) => {
-        if (ev.payload.kind === "request") {
-          setApprovals((prev) => [
-            ...prev,
-            { approval_id: ev.payload.approval_id, tool: ev.payload.tool, detail: ev.payload.detail },
-          ]);
-        }
+    const unlisten = listen<{
+      kind: string;
+      approval_id: string;
+      tool: string;
+      detail: string;
+      preview: string | null;
+    }>("approval-request", (ev) => {
+      if (ev.payload.kind === "request") {
+        setApprovals((prev) => [
+          ...prev,
+          {
+            approval_id: ev.payload.approval_id,
+            tool: ev.payload.tool,
+            detail: ev.payload.detail,
+            preview: ev.payload.preview,
+          },
+        ]);
       }
-    );
+    });
     return () => {
       unlisten.then((f) => f());
     };
@@ -254,7 +263,12 @@ export function ChatPanel({
               <p className="text-sm mb-1">
                 Approve <code className="font-mono text-xs text-accent">{a.tool}</code>?
               </p>
-              <p className="text-xs text-ink-dim font-mono mb-3 break-all">{a.detail}</p>
+              <p className="text-xs text-ink-dim font-mono mb-2 break-all">{a.detail}</p>
+              {a.preview && (
+                <pre className="mb-3 max-h-48 overflow-y-auto rounded-lg bg-surface px-3 py-2 text-[11px] font-mono text-ink-dim whitespace-pre-wrap break-all">
+                  {a.preview}
+                </pre>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={() => answerApproval(a.approval_id, true)}
@@ -293,13 +307,22 @@ export function ChatPanel({
             />
             <div className="flex items-center justify-between px-3 pb-2">
               <span className="text-xs text-ink-faint">⌘↵ to run</span>
-              <button
-                onClick={run}
-                disabled={!ready || running || !input.trim()}
-                className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
-              >
-                {running ? "Running…" : "Run"}
-              </button>
+              {running ? (
+                <button
+                  onClick={() => invoke("cancel_run").catch(() => {})}
+                  className="rounded-lg border border-red-400/50 px-4 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-400/10"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={run}
+                  disabled={!ready || !input.trim()}
+                  className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+                >
+                  Run
+                </button>
+              )}
             </div>
           </div>
         </div>

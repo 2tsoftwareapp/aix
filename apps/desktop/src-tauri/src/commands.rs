@@ -84,6 +84,25 @@ pub struct ApprovalRegistry {
     pub pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
 }
 
+/// Token for the currently-running step, if any. One run at a time —
+/// starting a new run replaces (and implicitly abandons) the old token.
+#[derive(Default)]
+pub struct RunCancellation {
+    pub current: Mutex<Option<tokio_util::sync::CancellationToken>>,
+}
+
+#[tauri::command]
+pub fn cancel_run(registry: tauri::State<'_, RunCancellation>) -> Result<(), String> {
+    let token = registry.current.lock().map_err(|e| e.to_string())?.clone();
+    match token {
+        Some(t) => {
+            t.cancel();
+            Ok(())
+        }
+        None => Err("no run in progress".into()),
+    }
+}
+
 #[tauri::command]
 pub fn respond_approval(
     registry: tauri::State<'_, ApprovalRegistry>,
@@ -108,6 +127,9 @@ pub enum ApprovalRequestPayload {
         approval_id: String,
         tool: String,
         detail: String,
+        /// Content preview for write_file (first 2000 chars) so reviewers
+        /// never approve blind. None for other tools.
+        preview: Option<String>,
     },
 }
 
@@ -230,8 +252,15 @@ const STREAM_EVENT: &str = "step-stream";
 pub async fn run_step(
     app: AppHandle,
     registry: tauri::State<'_, ApprovalRegistry>,
+    cancellation: tauri::State<'_, RunCancellation>,
     input: RunStepInput,
 ) -> Result<(), String> {
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    cancellation
+        .current
+        .lock()
+        .map_err(|e| e.to_string())?
+        .replace(cancel_token.clone());
     let emit = |p: StepStreamPayload| {
         let _ = app.emit(STREAM_EVENT, p);
     };
@@ -334,10 +363,25 @@ pub async fn run_step(
                         };
                     }
                 }
+                let preview = if call.name == "write_file" {
+                    call.input
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|c| {
+                            if c.len() > 2000 {
+                                format!("{}\n… [{} more bytes]", &c[..2000], c.len() - 2000)
+                            } else {
+                                c.to_string()
+                            }
+                        })
+                } else {
+                    None
+                };
                 let _ = self.app.emit("approval-request", ApprovalRequestPayload::Request {
                     approval_id,
                     tool: call.name.clone(),
                     detail: detail.clone(),
+                    preview,
                 });
                 match tokio::time::timeout(std::time::Duration::from_secs(600), rx).await {
                     Ok(Ok(v)) => v,
@@ -414,6 +458,7 @@ pub async fn run_step(
             agent_loop::LoopEvent::ToolFinished { .. } => {}
             agent_loop::LoopEvent::Usage { .. } => {}
         },
+        cancel_token,
     )
     .await;
 
@@ -422,6 +467,12 @@ pub async fn run_step(
         Err(agent_loop::LoopError::StreamInterrupted) => {
             emit(StepStreamPayload::Error {
                 message: "stream interrupted — artifact NOT written to avoid truncation".into(),
+            });
+            return Ok(());
+        }
+        Err(agent_loop::LoopError::Cancelled) => {
+            emit(StepStreamPayload::Error {
+                message: "cancelled by user".into(),
             });
             return Ok(());
         }

@@ -1,8 +1,8 @@
 mod commands;
 
 use commands::{
-    check_gate, flip_checklist_item, has_provider_key, read_artifact, respond_approval, run_step,
-    scan_pipeline, store_provider_key, write_artifact, ApprovalRegistry,
+    cancel_run, check_gate, flip_checklist_item, has_provider_key, read_artifact, respond_approval,
+    run_step, scan_pipeline, store_provider_key, write_artifact, ApprovalRegistry, RunCancellation,
 };
 use speckit_core::TemplateStore;
 
@@ -22,11 +22,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(ApprovalRegistry::default())
+        .manage(RunCancellation::default())
         .invoke_handler(tauri::generate_handler![
             scan_pipeline,
             check_gate,
             run_step,
             respond_approval,
+            cancel_run,
             store_provider_key,
             has_provider_key,
             read_artifact,

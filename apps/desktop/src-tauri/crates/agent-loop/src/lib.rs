@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use providers::{CompletionRequest, Message, Provider, ProviderError, Role, StreamEvent, ToolCall, ToolDef, ToolResult};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
 pub enum LoopError {
@@ -18,6 +19,8 @@ pub enum LoopError {
     StreamInterrupted,
     #[error("exceeded {0} iterations")]
     IterationBound(u32),
+    #[error("cancelled by user")]
+    Cancelled,
 }
 
 /// Events the loop emits; the caller decides how to surface them.
@@ -54,6 +57,7 @@ pub async fn run<E, F>(
     first_user_message: String,
     executor: &E,
     mut emit: F,
+    cancel: CancellationToken,
 ) -> Result<(String, Vec<Message>), LoopError>
 where
     E: ToolExecutor + ?Sized,
@@ -68,6 +72,9 @@ where
 
     for iteration in 1..=config.max_iterations {
         let _ = iteration;
+        if cancel.is_cancelled() {
+            return Err(LoopError::Cancelled);
+        }
         let req = CompletionRequest {
             model: config.model.clone(),
             system: Some(config.system.clone()),
@@ -82,6 +89,9 @@ where
         let mut saw_terminal = false; // Done or Error — anything else is an interruption
 
         while let Some(item) = stream.next().await {
+            if cancel.is_cancelled() {
+                return Err(LoopError::Cancelled);
+            }
             match item {
                 Ok(StreamEvent::TextDelta { text }) => {
                     turn_text.push_str(&text);
@@ -224,7 +234,7 @@ mod tests {
             StreamEvent::Done,
         ]]);
         let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
-        let (text, _) = run(&p, &config(), "hi".into(), &ex, |_| {}).await.unwrap();
+        let (text, _) = run(&p, &config(), "hi".into(), &ex, |_| {}, CancellationToken::new()).await.unwrap();
         assert_eq!(text, "hello");
     }
 
@@ -235,7 +245,7 @@ mod tests {
             vec![StreamEvent::TextDelta { text: "done writing".into() }, StreamEvent::Done],
         ]);
         let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
-        let (text, messages) = run(&p, &config(), "hi".into(), &ex, |_| {}).await.unwrap();
+        let (text, messages) = run(&p, &config(), "hi".into(), &ex, |_| {}, CancellationToken::new()).await.unwrap();
         assert_eq!(text, "done writing");
         assert_eq!(*ex.executed.lock().unwrap(), vec!["write_file"]);
         // transcript: user, assistant(tool_calls), user(tool_results)
@@ -250,7 +260,7 @@ mod tests {
         // regression guard for truncated-artifact hazard: a stream that just ends
         let p = ScriptedProvider::new(vec![vec![StreamEvent::TextDelta { text: "partial".into() }]]);
         let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
-        let err = run(&p, &config(), "hi".into(), &ex, |_| {}).await.unwrap_err();
+        let err = run(&p, &config(), "hi".into(), &ex, |_| {}, CancellationToken::new()).await.unwrap_err();
         assert!(matches!(err, LoopError::StreamInterrupted));
     }
 
@@ -263,7 +273,7 @@ mod tests {
         let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
         let mut cfg = config();
         cfg.max_iterations = 5;
-        let err = run(&p, &cfg, "hi".into(), &ex, |_| {}).await.unwrap_err();
+        let err = run(&p, &cfg, "hi".into(), &ex, |_| {}, CancellationToken::new()).await.unwrap_err();
         assert!(matches!(err, LoopError::IterationBound(5)));
     }
 
@@ -279,7 +289,7 @@ mod tests {
         ]);
         let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
         let mut events = Vec::new();
-        run(&p, &config(), "hi".into(), &ex, |e| events.push(e)).await.unwrap();
+        run(&p, &config(), "hi".into(), &ex, |e| events.push(e), CancellationToken::new()).await.unwrap();
         assert_eq!(
             events,
             vec![
@@ -289,5 +299,14 @@ mod tests {
                 LoopEvent::Delta("b".into()),
             ]
         );
+    }
+    #[tokio::test]
+    async fn cancellation_stops_loop() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let p = ScriptedProvider::new(vec![vec![StreamEvent::Done]]);
+        let ex = RecordingExecutor { executed: Mutex::new(vec![]) };
+        let err = run(&p, &config(), "hi".into(), &ex, |_| {}, token).await.unwrap_err();
+        assert!(matches!(err, LoopError::Cancelled));
     }
 }

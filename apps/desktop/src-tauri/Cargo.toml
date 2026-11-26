@@ -42,6 +42,7 @@ providers = { path = "crates/providers" }
 executor = { path = "crates/executor" }
 futures-util = "0.3"
 async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
 agent-loop = { path = "crates/agent-loop" }
 app-state = { path = "crates/app-state" }
 
