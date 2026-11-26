@@ -529,6 +529,28 @@ pub async fn run_step(
         }
     }
 
+    // Converge: the report is ephemeral chat output unless persisted. Save it to the
+    // feature dir and surface the verdict so the implement↔converge loop is trackable.
+    if step == Step::Converge && !final_text.trim().is_empty() {
+        let report_path = feature_dir.join("converge.md");
+        let _ = std::fs::write(&report_path, strip_code_fence(&final_text));
+        emit(StepStreamPayload::ArtifactWritten {
+            path: report_path.to_string_lossy().into_owned(),
+        });
+        let converged = final_text
+            .split_whitespace()
+            .any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("converged"));
+        emit(StepStreamPayload::ToolResult {
+            name: "verdict".into(),
+            ok: converged,
+            detail: if converged {
+                "CONVERGED — implementation matches artifacts".into()
+            } else {
+                "not yet converged — see converge.md for remaining work, then re-run implement".into()
+            },
+        });
+    }
+
     emit(StepStreamPayload::Done);
     Ok(())
 }
