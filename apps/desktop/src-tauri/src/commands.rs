@@ -184,6 +184,7 @@ fn make_provider(provider_id: &str) -> Result<Box<dyn Provider>, String> {
         "anthropic" => Box::new(AnthropicProvider::new(key)),
         "openai" => Box::new(OpenAiCompatProvider::openai(key)),
         "openrouter" => Box::new(OpenAiCompatProvider::openrouter(key)),
+        "qwen" => Box::new(OpenAiCompatProvider::qwen(key)),
         other => return Err(format!("unknown provider: {other}")),
     })
 }

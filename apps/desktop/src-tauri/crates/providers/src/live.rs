@@ -75,6 +75,22 @@ impl OpenAiCompatProvider {
         }
     }
 
+    /// Alibaba Qwen via DashScope's OpenAI-compatible mode. Default is the
+    /// international endpoint; mainland-China accounts set DASHSCOPE_BASE_URL
+    /// to https://dashscope.aliyuncs.com/compatible-mode.
+    pub fn qwen(api_key: String) -> Self {
+        let base_url = std::env::var("DASHSCOPE_BASE_URL")
+            .unwrap_or_else(|_| "https://dashscope-intl.aliyuncs.com/compatible-mode".into());
+        Self {
+            client: reqwest::Client::new(),
+            api_key,
+            base_url,
+            provider_id: "qwen",
+            display: "Qwen (Alibaba)",
+            extra_headers: vec![],
+        }
+    }
+
     pub fn openrouter(api_key: String) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -120,6 +136,12 @@ impl Provider for OpenAiCompatProvider {
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         match self.provider_id {
             "openai" => Ok(vec!["gpt-5".into(), "gpt-5-mini".into()]),
+            "qwen" => Ok(vec![
+                "qwen3-max".into(),
+                "qwen-plus".into(),
+                "qwen-turbo".into(),
+                "qwen3-coder-plus".into(),
+            ]),
             _ => Ok(vec![]), // OpenRouter catalog is large; queried live in a later task
         }
     }

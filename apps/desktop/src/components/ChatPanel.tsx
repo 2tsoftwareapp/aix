@@ -7,6 +7,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
   anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
   openai: ["gpt-5.2", "gpt-5.2-mini", "o4-mini"],
   openrouter: ["anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "google/gemini-3-pro"],
+  qwen: ["qwen3-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"],
 };
 
 const STEP_HINTS: Record<StepId, string> = {
@@ -210,6 +211,7 @@ export function ChatPanel({
             <option value="anthropic">anthropic</option>
             <option value="openai">openai</option>
             <option value="openrouter">openrouter</option>
+            <option value="qwen">qwen</option>
           </select>
           <select
             value={model}

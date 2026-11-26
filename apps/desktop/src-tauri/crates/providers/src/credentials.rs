@@ -27,8 +27,14 @@ pub fn store(provider_id: &str, secret: &str) -> Result<String, CredentialError>
 /// headless Linux (no secret-service), CI, and dev shells — the keychain remains
 /// the primary store. Never log the return value.
 fn env_fallback(provider_id: &str) -> Option<String> {
-    let var = format!("{}_API_KEY", provider_id.to_uppercase());
-    std::env::var(&var).ok().filter(|v| !v.trim().is_empty())
+    // primary: provider-derived name; aliases cover ecosystem conventions
+    let mut vars = vec![format!("{}_API_KEY", provider_id.to_uppercase())];
+    if provider_id == "qwen" {
+        vars.push("DASHSCOPE_API_KEY".into());
+    }
+    vars.iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.trim().is_empty())
 }
 
 /// Retrieve a secret for use in an Authorization header. Never log the return value.

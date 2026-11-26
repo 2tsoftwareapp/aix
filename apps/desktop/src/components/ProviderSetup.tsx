@@ -5,6 +5,7 @@ const PROVIDERS = [
   { id: "anthropic", label: "Anthropic", hint: "console.anthropic.com API key" },
   { id: "openai", label: "OpenAI", hint: "platform.openai.com API key" },
   { id: "openrouter", label: "OpenRouter", hint: "openrouter.ai API key" },
+  { id: "qwen", label: "Qwen", hint: "DashScope API key" },
 ];
 
 export function ProviderSetup({ onDone }: { onDone: () => void }) {
