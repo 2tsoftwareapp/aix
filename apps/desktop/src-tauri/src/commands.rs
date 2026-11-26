@@ -197,13 +197,17 @@ fn feature_or_active<'a>(
 fn make_provider(provider_id: &str) -> Result<Box<dyn Provider>, String> {
     let key = providers::credentials::retrieve(provider_id)
         .map_err(|e| format!("no API key stored for {provider_id}: {e}"))?;
-    Ok(match provider_id {
-        "anthropic" => Box::new(AnthropicProvider::new(key)),
-        "openai" => Box::new(OpenAiCompatProvider::openai(key)),
-        "openrouter" => Box::new(OpenAiCompatProvider::openrouter(key)),
-        "qwen" => Box::new(OpenAiCompatProvider::qwen(key)),
-        other => return Err(format!("unknown provider: {other}")),
-    })
+    if provider_id == "anthropic" {
+        return Ok(Box::new(AnthropicProvider::new(key)));
+    }
+    let cfg = providers::vendor::vendor(provider_id).ok_or_else(|| {
+        let known: Vec<&str> = providers::vendor::vendors().iter().map(|v| v.id.as_str()).collect();
+        format!("unknown provider: {provider_id} (configured vendors: {})", known.join(", "))
+    })?;
+    if cfg.kind != "openai_compat" {
+        return Err(format!("provider {provider_id} has unsupported kind {}", cfg.kind));
+    }
+    Ok(Box::new(OpenAiCompatProvider::from_vendor(key, cfg)))
 }
 
 /// Per-artifact context budget (~25k tokens at 4 chars/token). Oversized artifacts
@@ -314,6 +318,10 @@ pub async fn run_step(
         }
         _ => {}
     }
+
+    // Snapshot backup: copy current artifacts before the agent may mutate them.
+    // Cheap insurance against destructive overwrites — restore by copying back.
+    snapshot_artifacts(&project_root, input.feature_slug.as_deref(), &input.step);
 
     // Resolve feature dir. Specify always creates a NEW feature dir — upstream
     // spec-kit behavior: each specification is a new numbered feature. Editing an
@@ -822,6 +830,35 @@ pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::M
         .map_err(|e| e.to_string())
 }
 
+/// Serializable vendor metadata for the settings UI — no secrets, just
+/// display/config fields from vendors.json.
+#[derive(serde::Serialize)]
+pub struct VendorInfo {
+    pub id: String,
+    pub display: String,
+    pub kind: String,
+    pub env: String,
+    pub placeholder: String,
+    pub source: String,
+    pub note: Option<String>,
+}
+
+#[tauri::command]
+pub fn list_vendor_configs() -> Vec<VendorInfo> {
+    providers::vendor::vendors()
+        .iter()
+        .map(|v| VendorInfo {
+            id: v.id.clone(),
+            display: v.display.clone(),
+            kind: v.kind.clone(),
+            env: v.env.clone(),
+            placeholder: v.placeholder.clone(),
+            source: v.source.clone(),
+            note: v.note.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -872,4 +909,58 @@ mod tests {
         let unterminated = "good\n<tool_call> never closed";
         assert_eq!(super::strip_pseudo_tool_calls(unterminated), "good\n");
     }
+}
+
+/// Copy the feature's spec dir and constitution into a timestamped backup folder
+/// under `.speckit-desktop/backups/`. Best-effort — failures never block a run.
+fn snapshot_artifacts(project_root: &std::path::Path, feature_slug: Option<&str>, step: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup_dir = project_root
+        .join(".speckit-desktop")
+        .join("backups")
+        .join(format!("{ts}-{step}"));
+    let copy_dir = |src: std::path::PathBuf, dst: std::path::PathBuf| {
+        if !src.exists() {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&dst);
+        if let Ok(entries) = std::fs::read_dir(&src) {
+            for entry in entries.flatten() {
+                let from = entry.path();
+                if from.is_file() {
+                    let _ = std::fs::copy(&from, dst.join(entry.file_name()));
+                }
+            }
+        }
+    };
+    if let Some(slug) = feature_slug {
+        copy_dir(
+            project_root.join("specs").join(slug),
+            backup_dir.join("specs").join(slug),
+        );
+    }
+    copy_dir(
+        project_root.join(".specify").join("memory"),
+        backup_dir.join("memory"),
+    );
+    // Retention: keep the newest 20 backups per project.
+    let backups_root = project_root.join(".speckit-desktop").join("backups");
+    if let Ok(mut entries) = std::fs::read_dir(&backups_root)
+        .map(|rd| rd.flatten().collect::<Vec<_>>())
+    {
+        entries.sort_by_key(|e| e.file_name());
+        if entries.len() > 20 {
+            for old in &entries[..entries.len() - 20] {
+                let _ = std::fs::remove_dir_all(old.path());
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn is_git_repo(project_root: String) -> bool {
+    std::path::Path::new(&project_root).join(".git").exists()
 }

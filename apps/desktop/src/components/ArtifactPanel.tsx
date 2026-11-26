@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Pencil, Eye, Copy, Check, FileText, ClipboardCheck, FolderOpen,
+  PanelRightClose,
 } from "lucide-react";
 import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
@@ -79,12 +80,14 @@ export function ArtifactPanel({
   featureSlug,
   refreshToken,
   checklists,
+  onCollapse,
 }: {
   step: StepId;
   projectRoot: string | null;
   featureSlug: string | null;
   refreshToken: number;
   checklists: string[];
+  onCollapse?: () => void;
 }) {
   const toast = useAppToast();
   const [rel, setRel] = useState<string | null>(ARTIFACT_FOR_STEP[step] ?? "spec.md");
@@ -382,6 +385,15 @@ export function ArtifactPanel({
             />
           )}
           {dirty && <Badge variant="warning" label="unsaved" />}
+          {onCollapse && (
+            <IconButton
+              label="Collapse panel"
+              variant="ghost"
+              size="sm"
+              icon={<PanelRightClose size={14} />}
+              onClick={onCollapse}
+            />
+          )}
         </HStack>
       </HStack>
       <StackItem size="fill">

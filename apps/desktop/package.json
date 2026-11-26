@@ -1,9 +1,9 @@
 {
-  "name": "@x/desktop",
+  "name": "@aix/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "aix — speckit-native desktop AI agent",
+  "description": "aix \u2014 speckit-native desktop AI agent",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

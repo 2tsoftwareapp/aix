@@ -2,14 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Send, Square, ShieldQuestion, FileText, CheckCircle2, XCircle,
-  Wrench, AlertTriangle, Sprout, KeyRound, FolderOpen,
-} from "lucide-react";
-import { useKeyStatus } from "../lib/providerKeys";
+  ShieldQuestion, CheckCircle2, XCircle,
+  Wrench, AlertTriangle, KeyRound, FolderOpen, Lock, CircleCheck, ChevronDown } from "lucide-react";
+import { useKeyStatus, useVendorConfigs } from "../lib/providerKeys";
+import { STEPS, STEP_ICONS, stepStatus } from "../lib/steps";
+import { useStepGates } from "../lib/stepGates";
 import { useAppToast } from "../lib/toast";
-import { searchModelItems, type ModelSearchItem } from "../lib/models";
+import {
+  sortCatalog, formatContextLength,
+  type CatalogEntry,
+} from "../lib/models";
 import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
-import { Text, Heading } from "@astryxdesign/core/Text";
+import { Text } from "@astryxdesign/core/Text";
 import { Icon } from "@astryxdesign/core/Icon";
 import { Button } from "@astryxdesign/core/Button";
 import { Badge } from "@astryxdesign/core/Badge";
@@ -18,26 +22,25 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Selector } from "@astryxdesign/core/Selector";
-import { Typeahead, type SearchSource } from "@astryxdesign/core/Typeahead";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatComposer,
+  ChatComposerInput,
+  ChatSendButton,
   ChatLayout,
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
   ChatSystemMessage,
 } from "@astryxdesign/core/Chat";
-import type { StepId } from "../types";
+import type { StepId, PipelineState } from "../types";
 import {
   appendMessage,
   appendStreamDelta,
-  stepWorkspaceMatches,
   workspaceKey,
   type ApprovalReq,
   type Msg,
-  type WorkspaceContext,
-} from "../lib/workspaceSessions";
+  type WorkspaceContext, type WorkspaceMap, stepWorkspaceMatches } from "../lib/workspaceSessions";
 import {
   registerRun,
   rekeyRunWorkspace,
@@ -70,6 +73,10 @@ const MODEL_OPTIONS: Record<string, string[]> = {
   qwen: ["qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus", "qwen-max-latest", "qwen-plus-latest", "qwen-flash"],
 };
 
+function staticModelsFor(provider: string): string[] {
+  return MODEL_OPTIONS[provider] ?? [];
+}
+
 const STEP_HINTS: Record<StepId, string> = {
   constitution: "Define project principles — evaluated against every later phase.",
   specify: "Create a new numbered feature describing what to build and why. After the run, the new feature and spec open automatically.",
@@ -80,6 +87,76 @@ const STEP_HINTS: Record<StepId, string> = {
   analyze: "Read-only cross-artifact consistency check.",
   implement: "Execute tasks phase by phase, respecting parallel markers.",
   converge: "Assess implementation against artifacts; loop until Converged.",
+};
+
+const STEP_STARTERS: Record<StepId, { title: string; description: string; prompts: string[] }> = {
+  constitution: {
+    title: "Draft the project constitution",
+    description: "The constitution pins down principles every later phase is evaluated against — quality bars, prohibited shortcuts, review rules.",
+    prompts: [
+      "Draft a constitution for this project based on the codebase and existing docs",
+      "We value correctness over speed — encode that with concrete, testable principles",
+    ],
+  },
+  specify: {
+    title: "Specify a new feature",
+    description: "Creates a numbered feature spec: what to build, for whom, and why — no tech stack yet. The spec opens in the artifact panel when done.",
+    prompts: [
+      "Add a feature: ",
+      "Spec out the next highest-value feature you can infer from the codebase",
+    ],
+  },
+  clarify: {
+    title: "Resolve ambiguity in the spec",
+    description: "Reads spec.md and asks up to 5 targeted questions about anything unclear — answers get written back into the spec before planning starts.",
+    prompts: [
+      "Review spec.md and ask me about anything ambiguous or underspecified",
+      "Focus on edge cases and error handling — quiz me on the risky parts",
+    ],
+  },
+  plan: {
+    title: "Write the technical plan",
+    description: "Picks the tech stack, architecture, and constraints that satisfy the spec — this is where implementation decisions get made.",
+    prompts: [
+      "Write the implementation plan for this feature",
+      "Plan it, preferring the simplest architecture that satisfies the spec",
+    ],
+  },
+  checklist: {
+    title: "Generate quality checklists",
+    description: "Unit tests for the requirements themselves — reviewer-owned gates the agent cannot self-approve.",
+    prompts: [
+      "Generate checklists for the spec's requirements",
+    ],
+  },
+  tasks: {
+    title: "Break the plan into tasks",
+    description: "Dependency-ordered implementation tasks grouped by user story, with parallel markers where safe.",
+    prompts: [
+      "Break the plan into implementation tasks",
+    ],
+  },
+  analyze: {
+    title: "Cross-check the artifacts",
+    description: "Read-only consistency analysis across spec, plan, and tasks — catches contradictions before they reach code.",
+    prompts: [
+      "Analyze the artifacts for inconsistencies",
+    ],
+  },
+  implement: {
+    title: "Implement the tasks",
+    description: "Executes tasks phase by phase, respecting dependencies and parallel markers.",
+    prompts: [
+      "Implement the tasks, phase by phase",
+    ],
+  },
+  converge: {
+    title: "Converge implementation with spec",
+    description: "Assesses implementation against artifacts and loops until converged.",
+    prompts: [
+      "Assess the implementation against the spec and fix gaps",
+    ],
+  },
 };
 
 const APPROVAL_MODE_HINTS: Record<string, string> = {
@@ -112,9 +189,10 @@ function SystemLine({ msg }: { msg: Extract<Msg, { role: "system" }> }) {
     : msg.variant === "warning" ? "warning"
     : "secondary";
   return (
-    <ChatSystemMessage icon={<Icon icon={icon} size="sm" color={color} />}>
-      <Text type="code" size="xsm" color="secondary">{msg.text}</Text>
-    </ChatSystemMessage>
+    <HStack gap={2} vAlign="start" width="100%" padding={1}>
+      <Icon icon={icon} size="sm" color={color} />
+      <Text type="code" size="xsm" color="secondary" style={{ textAlign: "left", flex: 1, minWidth: 0 }}>{msg.text}</Text>
+    </HStack>
   );
 }
 
@@ -159,16 +237,20 @@ function ReadyState({
   providerHasKey,
   ready,
   step,
+  featureSlug,
   onOpenProject,
   onOpenSetup,
+  onUsePrompt,
 }: {
   projectRoot: string | null;
   providerId: string;
   providerHasKey: boolean;
   ready: boolean;
   step: StepId;
+  featureSlug: string | null;
   onOpenProject: () => Promise<void>;
   onOpenSetup: () => void;
+  onUsePrompt: (prompt: string) => void;
 }) {
   if (!projectRoot) {
     return (
@@ -191,42 +273,204 @@ function ReadyState({
     );
   }
   if (ready) {
+    const starter = STEP_STARTERS[step];
     return (
-      <EmptyState
-        icon={<Icon icon={Sprout} size="lg" color="accent" />}
-        title={`Ready for ${step}`}
-        description={`Describe the input for /speckit.${step} in the composer below. Enter to run, Shift+Enter for a newline.`}
-      />
+      <VStack gap={4} hAlign="center" padding={4} width="100%" style={{ maxWidth: 560 }}>
+        <VStack gap={2} hAlign="center">
+          <Icon icon={STEP_ICONS[step]} size="lg" color="accent" />
+          <Text type="large" weight="semibold">{starter.title}</Text>
+          <Text type="body" color="secondary" style={{ textAlign: "center", maxWidth: 480 }}>
+            {starter.description}
+          </Text>
+          {featureSlug && <Text type="code" size="xsm" color="secondary">{featureSlug}</Text>}
+        </VStack>
+        <VStack gap={2} width="100%">
+          {starter.prompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => onUsePrompt(prompt)}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "10px 14px",
+                borderRadius: "var(--radius-element)",
+                border: "1px solid var(--color-border)",
+                backgroundColor: "transparent",
+                color: "var(--color-text-secondary)",
+                fontSize: "var(--text-body-size)",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "var(--color-accent)";
+                e.currentTarget.style.color = "var(--color-text-primary)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "var(--color-border)";
+                e.currentTarget.style.color = "var(--color-text-secondary)";
+              }}
+            >
+              {prompt}
+            </button>
+          ))}
+        </VStack>
+        <Text type="supporting" size="xsm" color="secondary">Enter to run · Shift+Enter for a newline</Text>
+      </VStack>
     );
   }
   return null;
 }
 
-export function ChatPanel({
+function StepNavigator({
   step,
+  pipeline,
   projectRoot,
   featureSlug,
+  workspaces,
+  stepGates,
+  onSelectStep,
+}: {
+  step: StepId;
+  pipeline: PipelineState | null;
+  projectRoot: string | null;
+  featureSlug: string | null;
+  workspaces: WorkspaceMap;
+  stepGates: Partial<Record<StepId, { allowed: boolean; reason: string | null }>>;
+  onSelectStep: (s: StepId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const stepIndex = STEPS.findIndex((s2) => s2.id === step);
+
+  const chipStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 6,
+    padding: "5px 10px", borderRadius: 8, cursor: "pointer",
+    background: "var(--color-surface-elevated, rgba(255,255,255,0.06))",
+    border: "1px solid var(--color-border)",
+    color: "inherit", font: "inherit", outline: "none",
+  };
+
+  return (
+    <div ref={ref} style={{ position: "absolute", top: 56, right: 12, zIndex: 30 }}>
+      {open ? (
+        <div
+          style={{
+            width: 232, borderRadius: 12, overflow: "hidden",
+            background: "var(--color-surface-elevated, #1c1c1e)",
+            border: "1px solid var(--color-border)",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
+          }}
+          role="menu"
+          aria-label="Pipeline steps"
+        >
+          {STEPS.map((s2, i) => {
+            const gate = stepGates[s2.id];
+            const blocked = gate != null && !gate.allowed;
+            const status = stepStatus(s2.id, pipeline, featureSlug);
+            const isCurrent = s2.id === step;
+            const ws = projectRoot
+              ? Object.values(workspaces).find((candidate) =>
+                  stepWorkspaceMatches(candidate, projectRoot, featureSlug, s2.id)
+                )
+              : undefined;
+            return (
+              <button
+                key={s2.id}
+                type="button"
+                disabled={blocked}
+                title={blocked ? (gate?.reason ?? "blocked") : undefined}
+                onClick={() => { onSelectStep(s2.id); setOpen(false); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, width: "100%",
+                  padding: "8px 12px", border: "none", cursor: blocked ? "not-allowed" : "pointer",
+                  background: isCurrent ? "rgba(255,255,255,0.08)" : "transparent",
+                  color: "inherit", font: "inherit", textAlign: "left",
+                  opacity: blocked ? 0.45 : 1,
+                }}
+                onMouseEnter={(e) => { if (!isCurrent && !blocked) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+                onMouseLeave={(e) => { if (!isCurrent) e.currentTarget.style.background = "transparent"; }}
+              >
+                {blocked ? (
+                  <Icon icon={Lock} size="xsm" color="secondary" />
+                ) : status === "done" ? (
+                  <Icon icon={STEP_ICONS[s2.id]} size="xsm" color="accent" />
+                ) : (
+                  <Icon icon={STEP_ICONS[s2.id]} size="xsm" color={isCurrent ? "accent" : "secondary"} />
+                )}
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <Text type="supporting" weight={isCurrent ? "semibold" : undefined} color={blocked ? "secondary" : undefined} maxLines={1}>
+                    {s2.label}
+                  </Text>
+                </span>
+                {status === "done" && <Icon icon={CircleCheck} size="xsm" color="accent" />}
+                {ws?.running && <Spinner size="sm" shade="subtle" aria-label="running" />}
+                {ws != null && ws.approvals.length > 0 && <Icon icon={ShieldQuestion} size="xsm" color="warning" />}
+                <Text type="code" size="2xs" color="secondary">{i + 1}</Text>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <button type="button" style={chipStyle} onClick={() => setOpen(true)} aria-label="Open pipeline steps" aria-haspopup="menu">
+          <Icon icon={STEP_ICONS[step]} size="xsm" color="accent" />
+          <Text type="supporting" weight="medium">{STEPS[stepIndex]?.label ?? step}</Text>
+          <Text type="code" size="2xs" color="secondary">{stepIndex + 1}/9</Text>
+          <Icon icon={ChevronDown} size="xsm" color="secondary" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function ChatPanel({
+  step,
+  pipeline,
+  projectRoot,
+  featureSlug,
+  onSelectStep,
   onStepDone,
   onOpenProject,
   onOpenSetup,
 }: {
   step: StepId;
+  pipeline: PipelineState | null;
   projectRoot: string | null;
   featureSlug: string | null;
+  onSelectStep: (s: StepId) => void;
   onStepDone: (context: WorkspaceContext | null, completedFeatureSlug: string | null) => void;
   onOpenProject: () => Promise<void>;
   onOpenSetup: () => void;
 }) {
   const toast = useAppToast();
   const workspaces = useWorkspaces();
+  const stepGates = useStepGates(projectRoot, featureSlug, pipeline);
   const [providerId, setProviderId] = useState(() => localStorage.getItem("aix-provider") ?? "anthropic");
   const [model, setModel] = useState(() => localStorage.getItem("aix-model") ?? "claude-sonnet-4-5");
   const [approvalMode, setApprovalMode] = useState(() => localStorage.getItem("aix-approval-mode") ?? "ask");
   const keyStatus = useKeyStatus();
+  const vendorConfigs = useVendorConfigs();
   const providerHasKey = !!keyStatus[providerId];
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
   const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
-  const modelQueryRef = useRef("");
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const context: WorkspaceContext | null = projectRoot ? { projectRoot, featureSlug, step } : null;
   const key = context ? workspaceKey(context.projectRoot, context.featureSlug, context.step) : null;
   const workspace = key ? workspaces[key] : undefined;
@@ -259,39 +503,62 @@ export function ChatPanel({
   };
 
   useEffect(() => {
-    const CACHE_KEY = "aix-openrouter-catalog";
-    const derive = (catalog: string[]): Record<string, string[]> => {
+    const CACHE_KEY = "aix-openrouter-catalog-v2";
+    const derive = (ids: string[]): Record<string, string[]> => {
       const strip = (vendor: string) =>
-        catalog
+        ids
           .filter((id) => id.startsWith(vendor + "/") && !id.includes(":"))
           .map((id) => id.slice(vendor.length + 1));
       return {
         anthropic: strip("anthropic").map((id) => id.replace(/\./g, "-")),
         openai: strip("openai").filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id)),
         qwen: strip("qwen").filter((id) => id.startsWith("qwen")),
-        openrouter: catalog.filter((id) => !id.includes(":")),
       };
     };
-    const apply = (catalog: string[]) => {
-      const derived = derive(catalog);
-      setLiveModels((m) => ({ ...m, ...derived }));
+    const apply = (entries: CatalogEntry[]) => {
+      const usable = entries.filter((e) => !e.id.includes(":"));
+      setCatalog(sortCatalog(usable));
+      setLiveModels((m) => ({ ...m, ...derive(usable.map((e) => e.id)) }));
     };
     try {
       const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
-      if (cached && Date.now() - cached.at < 24 * 3600 * 1000 && cached.ids.length > 0) {
-        apply(cached.ids);
+      if (cached && Date.now() - cached.at < 24 * 3600 * 1000 && cached.entries?.length > 0) {
+        apply(cached.entries);
         return;
       }
     } catch { /* fall through to fetch */ }
-    invoke<{ id: string }[]>("list_models", { providerId: "openrouter" })
+    invoke<CatalogEntry[]>("list_models", { providerId: "openrouter" })
       .then((models) => {
         if (models.length === 0) return;
-        const ids = models.map((m) => m.id);
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
-        apply(ids);
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), entries: models }));
+        apply(models);
       })
       .catch(() => { /* static fallback lists remain */ });
   }, []);
+
+  // live catalog for direct vendors — OpenAI-compatible vendors expose /models;
+  // cached per vendor for an hour so the picker doesn't spam the API
+  useEffect(() => {
+    if (providerId === "openrouter" || !keyStatus[providerId]) return;
+    const cacheKey = `aix-vendor-models-${providerId}`;
+    const applyIds = (ids: string[]) => {
+      if (ids.length > 0) setLiveModels((m) => ({ ...m, [providerId]: ids }));
+    };
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null");
+      if (cached && Date.now() - cached.at < 3600 * 1000 && cached.ids.length > 0) {
+        applyIds(cached.ids);
+        return;
+      }
+    } catch { /* refetch */ }
+    invoke<{ id: string }[]>("list_models", { providerId })
+      .then((models) => {
+        const ids = models.map((m) => m.id);
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), ids }));
+        applyIds(ids);
+      })
+      .catch(() => { /* static fallback or manual entry */ });
+  }, [providerId, keyStatus]);
 
   useEffect(() => { localStorage.setItem("aix-provider", providerId); }, [providerId]);
   useEffect(() => { localStorage.setItem("aix-model", model); }, [model]);
@@ -308,11 +575,11 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!keyStatus[providerId]) {
-      const first = ["anthropic", "openai", "openrouter", "qwen"].find((p) => keyStatus[p]);
-      if (first) {
-        setProviderId(first);
-        setModel(MODEL_OPTIONS[first][0]);
-        toast.info(`Switched to ${first} — the configured provider`);
+      const configured = Object.keys(keyStatus).find((p) => keyStatus[p]);
+      if (configured) {
+        setProviderId(configured);
+        setModel(staticModelsFor(configured)[0] ?? "");
+        toast.info(`Switched to ${configured} — the configured provider`);
       }
     }
   }, [keyStatus, providerId, toast]);
@@ -417,9 +684,7 @@ export function ChatPanel({
       failedPrompt: null,
       lastPrompt: userInput,
     }));
-    const typedModel = modelQueryRef.current.trim();
-    const effectiveModel = typedModel || model;
-    if (typedModel && typedModel !== model) setModel(typedModel);
+    const effectiveModel = model;
     try {
       await invoke("run_step", {
         input: {
@@ -446,18 +711,36 @@ export function ChatPanel({
 
   const ready = projectRoot && providerHasKey;
   const gateBlocked = gate != null && !gate.allowed;
-  const modelIds = useMemo(() => (
-    liveModels[providerId]?.length
-      ? [...MODEL_OPTIONS[providerId].filter((m) => liveModels[providerId].includes(m)),
-         ...liveModels[providerId].filter((m) => !MODEL_OPTIONS[providerId].includes(m))]
-      : MODEL_OPTIONS[providerId]
-  ), [liveModels, providerId]);
+  const modelIds = useMemo(() => {
+    const statics = staticModelsFor(providerId);
+    return liveModels[providerId]?.length
+      ? [...statics.filter((m) => liveModels[providerId].includes(m)),
+         ...liveModels[providerId].filter((m) => !statics.includes(m))]
+      : statics;
+  }, [liveModels, providerId]);
 
-  const modelSearchSource = useMemo<SearchSource<ModelSearchItem>>(() => ({
-    search: (query: string) => searchModelItems(modelIds, query),
-    bootstrap: () => searchModelItems(modelIds, ""),
-  }), [modelIds]);
-  const selectedModel = useMemo<ModelSearchItem>(() => ({ id: model, label: model }), [model]);
+  const openrouterEntries = useMemo<CatalogEntry[]>(() => (
+    catalog.length > 0 ? catalog : MODEL_OPTIONS.openrouter.map((id) => ({ id }))
+  ), [catalog]);
+
+  const modelOptions = useMemo(() => {
+    const base = providerId === "openrouter"
+      ? openrouterEntries.map((e) => {
+          const slash = e.id.indexOf("/");
+          const vendor = slash > 0 ? e.id.slice(0, slash) : "";
+          const ctx = formatContextLength(e.context_length);
+          return {
+            value: e.id,
+            label: e.name ?? e.id,
+            description: [vendor, ctx].filter(Boolean).join(" · "),
+          };
+        })
+      : modelIds.map((id) => ({ value: id, label: id }));
+    if (model && !base.some((o) => o.value === model)) {
+      return [{ value: model, label: model, description: "custom" }, ...base];
+    }
+    return base;
+  }, [providerId, openrouterEntries, modelIds, model]);
 
   const hiddenApprovalWorkspace = Object.values(workspaces).find((candidate) =>
     candidate.key !== key
@@ -514,17 +797,25 @@ export function ChatPanel({
           ? { type: "warning" as const, message: "Last run failed — the prompt can be restored below." }
           : undefined;
 
+  const stepIndex = STEPS.findIndex((s2) => s2.id === step);
+
   return (
-    <VStack height="100%" width="100%" gap={0}>
-      <HStack padding={3} vAlign="center" justify="between" width="100%">
-        <StackItem size="fill">
-          <VStack gap={0}>
-            <Heading level={1}>{step}</Heading>
+    <VStack height="100%" width="100%" gap={0} style={{ position: "relative" }}>
+      <VStack gap={0} width="100%" style={{ borderBottom: "1px solid var(--color-border)" }}>
+        <HStack padding={3} vAlign="center" gap={3} width="100%">
+          <HStack gap={2} vAlign="center" style={{ minWidth: 0 }}>
+            <Icon icon={STEP_ICONS[step]} size="sm" color="accent" />
+            <Text type="supporting" weight="medium" maxLines={1}>{featureSlug ?? step}</Text>
+            {featureSlug && <Text type="supporting" color="secondary" maxLines={1}>·</Text>}
+            {featureSlug && <Text type="supporting" color="secondary" maxLines={1}>{step}</Text>}
+            <Text type="code" size="2xs" color="secondary">{stepIndex + 1}/9</Text>
+          </HStack>
+          <StackItem size="fill" style={{ minWidth: 0 }}>
             <Text type="supporting" color="secondary" maxLines={1}>{STEP_HINTS[step]}</Text>
-          </VStack>
-        </StackItem>
-        {featureSlug && <Badge variant="neutral" label={featureSlug} />}
-      </HStack>
+          </StackItem>
+          {featureSlug && <Badge variant="neutral" label={featureSlug} />}
+        </HStack>
+      </VStack>
       <ChatLayout
         density="compact"
           emptyState={
@@ -534,8 +825,10 @@ export function ChatPanel({
               providerHasKey={providerHasKey}
               ready={!!ready}
               step={step}
+              featureSlug={featureSlug}
               onOpenProject={onOpenProject}
               onOpenSetup={onOpenSetup}
+              onUsePrompt={setInput}
             />
           }
           composer={
@@ -553,16 +846,18 @@ export function ChatPanel({
                       : `Connect ${PROVIDER_LABELS[providerId] ?? providerId} to run agents`
               }
               isDisabled={!ready || gateBlocked}
+              input={<ChatComposerInput style={{ minHeight: 66 }} />}
+              style={{ "--focus-outline-color": "transparent" } as React.CSSProperties}
               density="compact"
-              elevation="none"
+              elevation="low"
               status={composerStatus}
               footerActions={
-                <HStack gap={1} vAlign="center" wrap="wrap">
+                <HStack gap={1} vAlign="center">
                   {failedPrompt && (
                     <Button
                       label="Restore prompt"
-                      variant="secondary"
-                      size="md"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => {
                         if (!key || !context) return;
                         updateWorkspace(key, context, (current) => ({
@@ -574,70 +869,55 @@ export function ChatPanel({
                     />
                   )}
                   <Selector
-                    label="Provider"
-                    isLabelHidden
-                    aria-label="Provider"
-                    options={["anthropic", "openai", "openrouter", "qwen"].map((p) => ({
-                      value: p,
-                      label: p,
-                      description: keyStatus[p] ? "configured" : "no key",
-                    }))}
-                    value={providerId}
-                    onChange={(p) => { modelQueryRef.current = ""; setProviderId(p); setModel(MODEL_OPTIONS[p][0]); }}
-                    size="md"
-                    variant="secondary"
-                    width={128}
-                  />
-                  <Typeahead
-                    label="Model"
-                    isLabelHidden
-                    aria-label="Model"
-                    searchSource={modelSearchSource}
-                    value={selectedModel}
-                    onChange={(item) => {
-                      if (!item) return;
-                      modelQueryRef.current = "";
-                      setModel(item.id);
-                    }}
-                    onChangeQuery={(query) => { modelQueryRef.current = query; }}
-                    onBlur={() => {
-                      const typed = modelQueryRef.current.trim();
-                      if (typed) setModel(typed);
-                    }}
-                    renderItem={(item) => item.auxiliaryData?.custom ? `Use "${item.label}"` : item.label}
-                    placeholder="Search or type model…"
-                    emptySearchText="Type an exact model ID"
-                    hasEntriesOnFocus
-                    hasClear={false}
-                    maxMenuItems={8}
-                    debounceMs={0}
-                    size="md"
-                    width={220}
-                  />
-                  <Selector
                     label="Approval mode"
                     isLabelHidden
                     aria-label="Approval mode"
-                    options={["ask", "auto-edit", "full-auto"]}
+                    options={[
+                      { value: "ask", label: "Ask first" },
+                      { value: "auto-edit", label: "Auto edit" },
+                      { value: "full-auto", label: "Full access" },
+                    ]}
                     value={approvalMode}
                     onChange={setApprovalMode}
                     labelTooltip={APPROVAL_MODE_HINTS[approvalMode]}
-                    size="md"
-                    variant="secondary"
-                    width={132}
+                    size="sm"
+                    variant="ghost"
+                  />
+                  <Selector
+                    label="Provider"
+                    isLabelHidden
+                    aria-label="Provider"
+                    options={(vendorConfigs.length > 0
+                      ? vendorConfigs.map((v) => ({ id: v.id, display: v.display }))
+                      : Object.keys(PROVIDER_LABELS).map((id) => ({ id, display: PROVIDER_LABELS[id] }))
+                    ).map((v) => ({
+                      value: v.id,
+                      label: v.display,
+                      description: keyStatus[v.id] ? "configured" : "no key",
+                    }))}
+                    value={providerId}
+                    onChange={(p) => { setProviderId(p); setModel(staticModelsFor(p)[0] ?? ""); }}
+                    size="sm"
+                    variant="ghost"
                   />
                 </HStack>
               }
+              sendActions={
+                <Selector
+                  label="Model"
+                  isLabelHidden
+                  aria-label="Model"
+                  options={modelOptions}
+                  value={model}
+                  onChange={(m) => setModel(m)}
+                  hasSearch
+                  searchPlaceholder="Search models…"
+                  size="sm"
+                  variant="ghost"
+                />
+              }
               sendButton={
-                running ? (
-                  <Button
-                    label="Stop"
-                    variant="destructive"
-                    size="md"
-                    icon={<Icon icon={Square} size="sm" />}
-                    onClick={() => invoke("cancel_run", { runId: activeRunId }).catch(() => {})}
-                  />
-                ) : projectRoot && !providerHasKey ? (
+                projectRoot && !providerHasKey && !running ? (
                   <Button
                     label="Connect provider"
                     variant="primary"
@@ -646,13 +926,12 @@ export function ChatPanel({
                     onClick={onOpenSetup}
                   />
                 ) : (
-                  <Button
-                    label={gate?.needs_confirmation ? "Confirm & run" : "Run"}
-                    variant="primary"
+                  <ChatSendButton
+                    isStopShown={running}
+                    isDisabled={!running && (!ready || !input.trim() || gateBlocked || anyRunning)}
+                    onSend={() => void run()}
+                    onStop={() => invoke("cancel_run", { runId: activeRunId }).catch(() => {})}
                     size="md"
-                    icon={<Icon icon={Send} size="sm" />}
-                    isDisabled={!ready || !input.trim() || gateBlocked || anyRunning}
-                    onClick={() => void run()}
                   />
                 )
               }
@@ -665,6 +944,15 @@ export function ChatPanel({
             </ChatMessageList>
           )}
         </ChatLayout>
+      <StepNavigator
+        step={step}
+        pipeline={pipeline}
+        projectRoot={projectRoot}
+        featureSlug={featureSlug}
+        workspaces={workspaces}
+        stepGates={stepGates}
+        onSelectStep={onSelectStep}
+      />
     </VStack>
   );
 }

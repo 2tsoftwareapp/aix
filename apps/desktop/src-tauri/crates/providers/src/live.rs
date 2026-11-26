@@ -1,5 +1,6 @@
 //! Live provider implementations over the shared HTTP/SSE layer.
 
+use crate::vendor::VendorConfig;
 use crate::{anthropic, http, openai_compat, CompletionRequest, EventStream, Provider, ProviderError};
 use async_trait::async_trait;
 
@@ -11,20 +12,23 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
+        let base_url = crate::vendor::vendor("anthropic")
+            .map(|v| v.resolved_base_url())
+            .unwrap_or_else(|| "https://api.anthropic.com".into());
         Self {
             client: reqwest::Client::new(),
             api_key,
-            base_url: "https://api.anthropic.com".into(),
+            base_url,
         }
     }
 }
 
 #[async_trait]
 impl Provider for AnthropicProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "anthropic"
     }
-    fn display_name(&self) -> &'static str {
+    fn display_name(&self) -> &str {
         "Anthropic"
     }
 
@@ -54,65 +58,42 @@ impl Provider for AnthropicProvider {
     }
 }
 
+/// Generic OpenAI-compatible provider driven entirely by vendor config —
+/// adding a vendor to vendors.json makes it executable with no code change.
 pub struct OpenAiCompatProvider {
     client: reqwest::Client,
     api_key: String,
+    /// Includes the version segment; `/chat/completions` hangs off it.
     base_url: String,
-    provider_id: &'static str,
-    display: &'static str,
+    provider_id: String,
+    display: String,
     extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiCompatProvider {
-    pub fn openai(api_key: String) -> Self {
+    pub fn from_vendor(api_key: String, cfg: &VendorConfig) -> Self {
         Self {
             client: reqwest::Client::new(),
             api_key,
-            base_url: "https://api.openai.com".into(),
-            provider_id: "openai",
-            display: "OpenAI",
-            extra_headers: vec![],
-        }
-    }
-
-    /// Alibaba Qwen via DashScope's OpenAI-compatible mode. Default is the
-    /// international endpoint; mainland-China accounts set DASHSCOPE_BASE_URL
-    /// to https://dashscope.aliyuncs.com/compatible-mode.
-    pub fn qwen(api_key: String) -> Self {
-        let base_url = std::env::var("DASHSCOPE_BASE_URL")
-            .unwrap_or_else(|_| "https://dashscope-intl.aliyuncs.com/compatible-mode".into());
-        Self {
-            client: reqwest::Client::new(),
-            api_key,
-            base_url,
-            provider_id: "qwen",
-            display: "Qwen (Alibaba)",
-            extra_headers: vec![],
-        }
-    }
-
-    pub fn openrouter(api_key: String) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            api_key,
-            base_url: "https://openrouter.ai/api".into(),
-            provider_id: "openrouter",
-            display: "OpenRouter",
-            extra_headers: vec![
-                ("HTTP-Referer".into(), "https://github.com/truongnat/aix".into()),
-                ("X-Title".into(), "aix".into()),
-            ],
+            base_url: cfg.resolved_base_url(),
+            provider_id: cfg.id.clone(),
+            display: cfg.display.clone(),
+            extra_headers: cfg
+                .extra_headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }
     }
 }
 
 #[async_trait]
 impl Provider for OpenAiCompatProvider {
-    fn id(&self) -> &'static str {
-        self.provider_id
+    fn id(&self) -> &str {
+        &self.provider_id
     }
-    fn display_name(&self) -> &'static str {
-        self.display
+    fn display_name(&self) -> &str {
+        &self.display
     }
 
     async fn complete(&self, req: CompletionRequest) -> Result<EventStream, ProviderError> {
@@ -124,7 +105,7 @@ impl Provider for OpenAiCompatProvider {
         headers.extend(self.extra_headers.clone());
         http::post_sse(
             &self.client,
-            &format!("{}/v1/chat/completions", self.base_url),
+            &format!("{}/chat/completions", self.base_url),
             headers,
             body,
             openai_compat::OpenAiMapper::default,
@@ -134,15 +115,7 @@ impl Provider for OpenAiCompatProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        match self.provider_id {
-            "openai" => Ok(vec!["gpt-5".into(), "gpt-5-mini".into()]),
-            "qwen" => Ok(vec![
-                "qwen3-max".into(),
-                "qwen-plus".into(),
-                "qwen-turbo".into(),
-                "qwen3-coder-plus".into(),
-            ]),
-            _ => Ok(vec![]), // OpenRouter catalog is large; queried live in a later task
-        }
+        // Static trait fallback — the live catalog path is commands::list_models.
+        Ok(vec![])
     }
 }

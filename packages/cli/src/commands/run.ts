@@ -79,7 +79,7 @@ export async function handleGitCheckIfDirty(): Promise<'proceed' | 'cancel'> {
       });
       s.stop('Analysis complete.');
       summary = `Uncommitted Changes Summary:\n${response.content}\n\nModified files:\n  ${filesList}`;
-    } catch (err) {
+    } catch {
       s.stop('Analysis failed.');
     }
   }

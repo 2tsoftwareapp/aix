@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "turbo run build",
-    "lint": "turbo run lint",
+    "lint": "eslint . && turbo run lint",
     "test": "turbo run test",
     "check": "turbo run check",
     "clean": "turbo run clean",
@@ -18,21 +18,48 @@
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "turbo": "^2.0.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "eslint": "^9",
+    "eslint-plugin-react-hooks": "^5",
+    "typescript-eslint": "^8"
   },
   "engines": {
     "node": ">=22.0.0"
   },
   "packageManager": "pnpm@9.15.0",
-  "workspaces": [
-    "packages/*",
-    "services/*",
-    "apps/*"
-  ],
   "dependencies": {
     "@astryxdesign/cli": "^0.7.17",
     "@astryxdesign/core": "^0.7.17",
     "@astryxdesign/theme-neutral": "^0.7.17",
     "@stylexjs/stylex": "^0.19.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "express@<5.3.0": "^5.3.0",
+      "multer@<2.5.0": "^2.5.0",
+      "body-parser@<2.4.0": "^2.4.0",
+      "proxy-addr@<2.0.8": "^2.0.8",
+      "qs@<6.16.1": "^6.16.1",
+      "postcss@<8.5.23": "^8.5.23",
+      "source-map-js@<1.2.2": "^1.2.2",
+      "nanoid@<3.3.18": "^3.3.18",
+      "js-yaml@<3.15.2": "^3.15.2",
+      "zod@<4.6.6": "^4.6.7",
+      "vue": "^3.5.46",
+      "@vue/server-renderer": "^3.5.46",
+      "@vue/compiler-sfc": "^3.5.46",
+      "@vue/compiler-core": "^3.5.46",
+      "@vue/compiler-dom": "^3.5.46",
+      "@vue/compiler-ssr": "^3.5.46",
+      "@vue/shared": "^3.5.46",
+      "@vue/reactivity": "^3.5.46",
+      "@vue/runtime-core": "^3.5.46",
+      "@vue/runtime-dom": "^3.5.46",
+      "tar@<7.5.7": "^7.5.7",
+      "glob@>=9.0.0 <=14.0.1": "^14.0.2",
+      "minimatch@>=7.0.0 <11.0.1": "^11.0.1",
+      "esbuild@<=0.24.2": "^0.25.0",
+      "vite@<=6.4.1": "^6.4.2"
+    }
   }
 }

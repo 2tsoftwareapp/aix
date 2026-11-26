@@ -1,4 +1,5 @@
 import { redact } from '@x/policy';
+import { PROVIDER_PRICING, estimateUsd } from './pricing.js';
 
 export interface ModelCallOptions {
   readonly system: string;
@@ -236,7 +237,7 @@ export class CodexRuntimeProvider implements RuntimeProvider {
 
     // ChatGPT subscription calls are not metered per token; this blended
     // estimate only feeds the budget guard.
-    const usd = (tokens * 5) / 1_000_000;
+    const usd = estimateUsd(PROVIDER_PRICING.codexSubscriptionBlended, tokens, tokens);
     return { content, tokens, usd };
   }
 }
@@ -316,7 +317,7 @@ export class ApiRuntimeProvider implements RuntimeProvider {
 
     const content = data.content.map(c => c.text).join('\n');
     const tokens = data.usage.input_tokens + data.usage.output_tokens;
-    const usd = (data.usage.input_tokens * 3 + data.usage.output_tokens * 15) / 1_000_000;
+    const usd = estimateUsd(PROVIDER_PRICING.anthropic, data.usage.input_tokens, data.usage.output_tokens);
 
     return { content, tokens, usd };
   }
@@ -367,7 +368,7 @@ export class ApiRuntimeProvider implements RuntimeProvider {
 
     const content = data.choices[0]?.message?.content ?? '';
     const tokens = data.usage.prompt_tokens + data.usage.completion_tokens;
-    const usd = (data.usage.prompt_tokens * 2.5 + data.usage.completion_tokens * 10) / 1_000_000;
+    const usd = estimateUsd(PROVIDER_PRICING.openai, data.usage.prompt_tokens, data.usage.completion_tokens);
 
     return { content, tokens, usd };
   }

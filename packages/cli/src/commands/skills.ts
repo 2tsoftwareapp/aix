@@ -63,16 +63,14 @@ export function registerSkillsCommand(program: Command): void {
     .option('--role <role>', 'Filter by role: planner|coder|reviewer|architect')
     .action(async (opts: { kind?: string; role?: string }) => {
       const registry = await SkillRegistry.load(findContentRoot());
-      let skills = registry.all();
+      let catalog = registry.toCatalog();
 
       if (opts.kind) {
-        skills = skills.filter(s => s.frontmatter['x-kind'] === opts.kind);
+        catalog = catalog.filter(s => s.kind === opts.kind);
       }
       if (opts.role) {
-        skills = skills.filter(s => s.frontmatter['x-roles'].includes(opts.role as any));
+        catalog = catalog.filter(s => (s.roles as readonly string[]).includes(opts.role as string));
       }
-
-      const catalog = registry.toCatalog();
       console.table(catalog.map(s => ({
         name: s.name,
         kind: s.kind,

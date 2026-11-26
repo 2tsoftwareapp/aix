@@ -7,6 +7,7 @@ pub mod http;
 pub mod live;
 pub mod models;
 pub mod openai_compat;
+pub mod vendor;
 pub mod sse;
 
 use async_trait::async_trait;
@@ -104,8 +105,8 @@ pub enum Credential {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn display_name(&self) -> &'static str;
+    fn id(&self) -> &str;
+    fn display_name(&self) -> &str;
     async fn complete(&self, req: CompletionRequest) -> Result<EventStream, ProviderError>;
     async fn list_models(&self) -> Result<Vec<String>, ProviderError>;
 }
@@ -118,10 +119,10 @@ mod tests {
 
     #[async_trait]
     impl Provider for MockProvider {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "mock"
         }
-        fn display_name(&self) -> &'static str {
+        fn display_name(&self) -> &str {
             "Mock"
         }
         async fn complete(&self, _req: CompletionRequest) -> Result<EventStream, ProviderError> {

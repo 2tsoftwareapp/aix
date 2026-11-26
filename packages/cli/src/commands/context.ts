@@ -26,7 +26,6 @@ async function loadIndex(cwd: string): Promise<ContextEngine> {
     const raw = await readFile(indexPath, 'utf-8');
     const data = JSON.parse(raw) as { id: string; content: string; embedding: number[] }[];
     const store = SimpleVectorStore.fromJSON(data);
-    engine as any;
     // Replace vector store by re-creating engine with loaded store
     return ContextEngine.create({ vectorStore: store });
   }

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Trash2 } from "lucide-react";
-import { useKeyStatus, storeKey, deleteKey } from "../lib/providerKeys";
+import { invoke } from "@tauri-apps/api/core";
+import { useKeyStatus, useVendorConfigs, storeKey, deleteKey } from "../lib/providerKeys";
 import { useAppToast } from "../lib/toast";
 import { HStack, VStack, StackItem, Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
@@ -8,139 +9,207 @@ import { Icon } from "@astryxdesign/core/Icon";
 import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Badge } from "@astryxdesign/core/Badge";
-import { Card } from "@astryxdesign/core/Card";
 import { TextInput } from "@astryxdesign/core/TextInput";
+import { Typeahead, type SearchSource } from "@astryxdesign/core/Typeahead";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 
-const PROVIDERS = [
-  { id: "anthropic", display: "Anthropic", env: "ANTHROPIC_API_KEY", placeholder: "sk-ant-…", source: "console.anthropic.com" },
-  { id: "openai", display: "OpenAI", env: "OPENAI_API_KEY", placeholder: "sk-…", source: "platform.openai.com" },
-  { id: "openrouter", display: "OpenRouter", env: "OPENROUTER_API_KEY", placeholder: "sk-or-…", source: "openrouter.ai" },
-  { id: "qwen", display: "Qwen", env: "DASHSCOPE_API_KEY", placeholder: "sk-… (DashScope)", source: "bailian.console.aliyun.com" },
-] as const;
+interface VendorItem {
+  id: string;
+  label: string;
+  direct: boolean;
+}
 
-function ProviderCard({ provider, configured }: { provider: (typeof PROVIDERS)[number]; configured: boolean }) {
-  const toast = useAppToast();
-  const [draft, setDraft] = useState("");
-  const [busyAction, setBusyAction] = useState<"save" | "remove" | null>(null);
-
-  const save = async () => {
-    const key = draft.trim();
-    if (!key || busyAction) return;
-    setBusyAction("save");
-    try {
-      await storeKey(provider.id, key);
-      setDraft("");
-      toast.success(`${provider.display} key stored`, "provider active");
-    } catch (error) {
-      toast.error("Couldn't store key", String(error));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const remove = async () => {
-    if (busyAction) return;
-    setBusyAction("remove");
-    try {
-      await deleteKey(provider.id);
-      toast.success(`${provider.display} key removed`);
-    } catch (error) {
-      toast.error("Couldn't remove key", String(error));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  return (
-    <Card variant="muted" padding={3} width="100%">
-      <VStack gap={2} width="100%">
-        <HStack justify="between" vAlign="center" width="100%">
-          <Text type="label" weight="semibold">{provider.display}</Text>
-          {configured && (
-            <Badge
-              variant="success"
-              label="configured"
-              icon={<Icon icon={CheckCircle2} size="xsm" />}
-            />
-          )}
-        </HStack>
-        <Text type="supporting" color="secondary">
-          Get a key at <Text type="code" size="xsm" color="inherit">{provider.source}</Text> · env fallback: {provider.env}
-        </Text>
-        <HStack gap={2} width="100%" vAlign="end">
-          <StackItem size="fill">
-            <TextInput
-              label={`${provider.display} API key`}
-              isLabelHidden
-              aria-label={`${provider.display} API key`}
-              type="password"
-              value={draft}
-              onChange={setDraft}
-              onEnter={() => void save()}
-              placeholder={configured ? "paste a new key to replace…" : provider.placeholder}
-              width="100%"
-            />
-          </StackItem>
-          <Button
-            label={configured ? "Replace" : "Store"}
-            variant="secondary"
-            isDisabled={!draft.trim()}
-            isLoading={busyAction === "save"}
-            clickAction={save}
-          />
-          {configured && (
-            <IconButton
-              label={`Remove ${provider.display} key`}
-              variant="ghost"
-              icon={<Icon icon={Trash2} size="sm" color="error" />}
-              isLoading={busyAction === "remove"}
-              clickAction={remove}
-            />
-          )}
-        </HStack>
-      </VStack>
-    </Card>
-  );
+function prettify(id: string): string {
+  return id.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 export function ProviderSetup({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const keyStatus = useKeyStatus();
-  const hasConfiguredProvider = Object.values(keyStatus).some(Boolean);
+  const vendors = useVendorConfigs();
+  const toast = useAppToast();
+
+  const [vendorId, setVendorId] = useState<string | null>(null);
+  const [, setVendorQuery] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const vendor = vendors.find((v) => v.id === vendorId) ?? null;
+  const configuredVendors = vendors.filter((v) => keyStatus[v.id]);
+
+  // all upstream vendors in the live OpenRouter catalog — most of them are
+  // only reachable *through* OpenRouter, but users think in vendor names,
+  // so the selector should list everything and say so honestly
+  const [catalogVendorIds, setCatalogVendorIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isOpen) return;
+    invoke<{ id: string }[]>("list_models", { providerId: "openrouter" })
+      .then((models) => {
+        const ids = [...new Set(
+          models.filter((m) => m.id.includes("/")).map((m) => m.id.split("/")[0])
+        )].sort();
+        setCatalogVendorIds(ids);
+      })
+      .catch(() => { /* offline — curated list still works */ });
+  }, [isOpen]);
+
+  const vendorSource = useMemo<SearchSource<VendorItem>>(() => {
+    const directIds = new Set(vendors.map((v) => v.id));
+    const items: VendorItem[] = [
+      ...vendors.map((v) => ({ id: v.id, label: v.display, direct: true })),
+      ...catalogVendorIds
+        .filter((id) => !directIds.has(id))
+        .map((id) => ({ id, label: prettify(id), direct: false })),
+    ].sort((a, b) =>
+      Number(!!keyStatus[b.id]) - Number(!!keyStatus[a.id])
+      || Number(b.direct) - Number(a.direct)
+      || a.label.localeCompare(b.label));
+    const match = (query: string) => {
+      const needle = query.trim().toLowerCase();
+      return items.filter((i) => !needle || i.label.toLowerCase().includes(needle) || i.id.includes(needle));
+    };
+    return { search: match, bootstrap: () => items };
+  }, [vendors, catalogVendorIds, keyStatus]);
+
+  const selectedVendorItem = useMemo<VendorItem | null>(() => (
+    vendorId ? { id: vendorId, label: vendor?.display ?? prettify(vendorId), direct: !!vendor } : null
+  ), [vendorId, vendor]);
+
+  const save = async () => {
+    const trimmed = key.trim();
+    if (!vendor || !trimmed || busy) return;
+    setBusy(true);
+    try {
+      await storeKey(vendor.id, trimmed);
+      setKey("");
+      toast.success(`${vendor.display} key stored`, "provider active");
+    } catch (error) {
+      toast.error("Couldn't store key", String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string, display: string) => {
+    try {
+      await deleteKey(id);
+      toast.success(`${display} key removed`);
+    } catch (error) {
+      toast.error("Couldn't remove key", String(error));
+    }
+  };
 
   return (
     <Dialog
       isOpen={isOpen}
       onOpenChange={(open) => { if (!open) onClose(); }}
       width={560}
-      maxHeight="82dvh"
-      padding={0}
+      padding={4}
     >
       <Layout
         header={
           <DialogHeader
             title="Connect a provider"
-            subtitle="Add an API key when you are ready to run agents."
+            subtitle="Pick a vendor, paste its API key, save. Keys stay local in ~/.config/aix/credentials.json."
             onOpenChange={(open) => { if (!open) onClose(); }}
           />
         }
         content={
           <LayoutContent isScrollable>
-            <VStack gap={3} padding={3}>
-              <Text type="supporting" color="secondary">
-                aix uses provider API keys for agent runs. Signing in to a provider CLI does not configure this app.
-                Keys are stored locally in ~/.config/aix/credentials.json with owner-only permissions.
-              </Text>
-              {PROVIDERS.map((provider) => (
-                <ProviderCard key={provider.id} provider={provider} configured={!!keyStatus[provider.id]} />
-              ))}
+            <VStack gap={3}>
+              <HStack gap={2} width="100%" vAlign="end">
+                <StackItem size="fill">
+                  <Typeahead
+                    label="Provider"
+                    aria-label="Provider"
+                    searchSource={vendorSource}
+                    value={selectedVendorItem}
+                    onChange={(item) => {
+                      if (!item) return;
+                      setVendorQuery("");
+                      setVendorId(item.id);
+                    }}
+                    onChangeQuery={setVendorQuery}
+                    renderItem={(item) => (
+                      <HStack gap={2} vAlign="center" width="100%">
+                        <Text type="body" size="sm">{item.label}</Text>
+                        {keyStatus[item.id] && <Icon icon={CheckCircle2} size="xsm" color="success" />}
+                        {!item.direct && (
+                          <Text type="supporting" size="xsm" color="secondary">via OpenRouter</Text>
+                        )}
+                      </HStack>
+                    )}
+                    placeholder="Search provider…"
+                    emptySearchText="No vendor matches"
+                    hasEntriesOnFocus
+                    hasClear={false}
+                    maxMenuItems={12}
+                    debounceMs={0}
+                    size="md"
+                    width="100%"
+                  />
+                </StackItem>
+                <StackItem size="fill">
+                  <TextInput
+                    label="API key"
+                    aria-label="API key"
+                    type="password"
+                    value={key}
+                    onChange={setKey}
+                    onEnter={() => void save()}
+                    placeholder={vendor ? vendor.placeholder || "paste key…" : "select a provider first"}
+                    isDisabled={!vendor}
+                    width="100%"
+                  />
+                </StackItem>
+                <Button
+                  label="Save"
+                  variant="primary"
+                  isDisabled={!vendor || !key.trim() || !!(vendorId && !vendor)}
+                  isLoading={busy}
+                  clickAction={save}
+                />
+              </HStack>
+
+              {vendor && (
+                <Text type="supporting" size="xsm" color="secondary">
+                  Get a key at <Text type="code" size="xsm" color="inherit">{vendor.source}</Text>
+                  {" · "}env fallback: <Text type="code" size="xsm" color="inherit">{vendor.env}</Text>
+                  {vendor.note ? ` · ${vendor.note}` : ""}
+                </Text>
+              )}
+              {vendorId && !vendor && (
+                <Text type="supporting" size="xsm" color="secondary">
+                  {prettify(vendorId)} has no direct public API — its models are reachable through
+                  OpenRouter{keyStatus.openrouter ? ", which you already have configured" : " once you store an OpenRouter key"}.
+                  Nothing to configure here.
+                </Text>
+              )}
+
+              {configuredVendors.length > 0 && (
+                <VStack gap={1} width="100%">
+                  {configuredVendors.map((v) => (
+                    <HStack key={v.id} justify="between" vAlign="center" width="100%">
+                      <HStack gap={2} vAlign="center">
+                        <Text type="body" size="sm">{v.display}</Text>
+                        <Badge variant="success" label="configured" />
+                      </HStack>
+                      <IconButton
+                        label={`Remove ${v.display} key`}
+                        variant="ghost"
+                        icon={<Icon icon={Trash2} size="sm" color="error" />}
+                        clickAction={() => remove(v.id, v.display)}
+                      />
+                    </HStack>
+                  ))}
+                </VStack>
+              )}
             </VStack>
           </LayoutContent>
         }
         footer={
           <LayoutFooter hasDivider>
             <HStack justify="end" width="100%">
-              <Button label={hasConfiguredProvider ? "Done" : "Skip for now"} variant="secondary" onClick={onClose} />
+              <Button label="Done" variant="secondary" onClick={onClose} />
             </HStack>
           </LayoutFooter>
         }

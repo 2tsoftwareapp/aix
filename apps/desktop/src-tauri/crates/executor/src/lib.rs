@@ -190,6 +190,32 @@ pub fn tool_defs() -> Vec<providers::ToolDef> {
             }),
         },
         providers::ToolDef {
+            name: "edit_file".into(),
+            description: "Edit a file by replacing an exact string. Prefer this over write_file for modifying existing files — only the changed fragment is rewritten, the rest of the file is preserved byte-for-byte. The old_string must match exactly and be unique in the file (or use replace_all).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "old_string": { "type": "string", "description": "Exact text to find — include enough surrounding context to be unique" },
+                    "new_string": { "type": "string", "description": "Replacement text" },
+                    "replace_all": { "type": "boolean", "description": "Replace every occurrence, default false" },
+                },
+                "required": ["path", "old_string", "new_string"],
+            }),
+        },
+        providers::ToolDef {
+            name: "search_files".into(),
+            description: "Search file contents under a directory for a substring or pattern. Returns matching lines with file paths and line numbers (max 100 matches).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory relative to project root, empty for root" },
+                    "query": { "type": "string", "description": "Substring to search for (case-sensitive)" },
+                },
+                "required": ["path", "query"],
+            }),
+        },
+        providers::ToolDef {
             name: "list_files".into(),
             description: "List files under a directory relative to the project root (recursive, max 200 entries).".into(),
             input_schema: json!({
@@ -229,7 +255,7 @@ pub fn tool_requires_approval(name: &str, mode: ApprovalMode) -> bool {
         ApprovalMode::AutoEdit => name == "run_shell",
         // ask gates mutations only — read_file/list_files are non-destructive and
         // approving every read makes implement unusable (dozens of clicks per run)
-        ApprovalMode::Ask => name == "write_file" || name == "run_shell",
+        ApprovalMode::Ask => name == "write_file" || name == "edit_file" || name == "run_shell",
     }
 }
 
@@ -261,6 +287,47 @@ pub async fn execute_tool(
             }
             std::fs::write(&path, content)?;
             Ok(format!("wrote {} ({} bytes)", rel, content.len()))
+        }
+        "edit_file" => {
+            let rel = input.get("path").and_then(Value::as_str).unwrap_or("");
+            let old_str = input.get("old_string").and_then(Value::as_str).unwrap_or("");
+            let new_str = input.get("new_string").and_then(Value::as_str).unwrap_or("");
+            let replace_all = input.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
+            if old_str.is_empty() {
+                return Err(ExecutorError::Denied("old_string must not be empty".into()));
+            }
+            let path = resolve_scoped(root, rel)?;
+            let content = std::fs::read_to_string(&path)?;
+            let matches = content.matches(old_str).count();
+            if matches == 0 {
+                return Err(ExecutorError::Denied(format!(
+                    "old_string not found in {rel} — read the file first and match exactly"
+                )));
+            }
+            if matches > 1 && !replace_all {
+                return Err(ExecutorError::Denied(format!(
+                    "old_string matches {matches} times in {rel} — add more context to make it unique, or set replace_all"
+                )));
+            }
+            let updated = if replace_all {
+                content.replace(old_str, new_str)
+            } else {
+                content.replacen(old_str, new_str, 1)
+            };
+            std::fs::write(&path, &updated)?;
+            Ok(format!("edited {} ({} replacement{})", rel, if replace_all { matches } else { 1 }, if matches > 1 { "s" } else { "" }))
+        }
+        "search_files" => {
+            let rel = input.get("path").and_then(Value::as_str).unwrap_or("");
+            let query = input.get("query").and_then(Value::as_str).unwrap_or("");
+            if query.is_empty() {
+                return Err(ExecutorError::Denied("query must not be empty".into()));
+            }
+            let path = resolve_scoped(root, if rel.is_empty() { "." } else { rel })?;
+            let mut out = Vec::new();
+            search_recursive(&path, root, query, &mut out)?;
+            Ok(if out.is_empty() { "(no matches)".into() } else { out.join("
+") })
         }
         "list_files" => {
             let rel = input.get("path").and_then(Value::as_str).unwrap_or("");
@@ -328,6 +395,37 @@ pub fn audit_append(root: &Path, action: &str, detail: &str, approved: bool) {
             let _ = writeln!(f, "{line}");
         }
     }
+}
+
+fn search_recursive(dir: &Path, root: &Path, query: &str, out: &mut Vec<String>) -> Result<(), ExecutorError> {
+    if out.len() >= 100 {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
+        if out.len() >= 100 {
+            break;
+        }
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "node_modules" || name == "target" {
+            continue;
+        }
+        if path.is_dir() {
+            search_recursive(&path, root, query, out)?;
+        } else if let Ok(content) = std::fs::read_to_string(&path) {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy();
+            for (idx, line) in content.lines().enumerate() {
+                if line.contains(query) {
+                    out.push(format!("{rel}:{}: {}", idx + 1, line.trim()));
+                    if out.len() >= 100 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn list_recursive(dir: &Path, root: &Path, out: &mut Vec<String>, depth: usize) -> Result<(), ExecutorError> {

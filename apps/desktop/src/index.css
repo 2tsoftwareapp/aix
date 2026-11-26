@@ -3,3 +3,13 @@
   min-height: 60vh;
   font-family: var(--font-family-code);
 }
+
+/* Chat composer: roomier inner padding and aligned input/footer text. */
+.astryx-chat-composer > div {
+  --_chat-composer-padding: var(--spacing-4);
+  gap: var(--spacing-3);
+}
+.astryx-chat-composer-input [contenteditable="true"],
+.astryx-chat-composer-input > div[aria-hidden="true"] {
+  padding-inline: 0;
+}

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import type { Provider } from '@x/core';
 import type { ProviderAdapter, CompileInput } from '@x/providers';
 
@@ -41,8 +41,16 @@ export class Compiler {
     const skipped: string[] = [];
     const conflicts: string[] = [];
 
+    const rootResolved = resolve(opts.targetRoot);
+
     for (const file of files) {
-      const targetPath = join(opts.targetRoot, file.path);
+      // Emitted paths must stay inside the target root. Adapters build paths
+      // from skill/rule/agent names, so a malformed or malicious name must
+      // never escape the workspace through traversal or absolute segments.
+      const targetPath = resolve(rootResolved, file.path);
+      if (isAbsolute(file.path) || targetPath !== rootResolved && !targetPath.startsWith(rootResolved + sep)) {
+        throw new Error(`Adapter emitted unsafe path outside the target root: ${file.path}`);
+      }
       const newHash = hashContent(file.contents);
 
       let existingHash: string | undefined;

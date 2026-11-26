@@ -1,15 +1,15 @@
 import { z } from 'zod';
 import { SKILL_KINDS, PROVIDERS, ROLES, SKILL_NAME_MAX, SKILL_DESC_MAX, SKILL_CATEGORIES } from '@x/core';
 
-const skillFrontmatterBase = z.object({
+const skillFrontmatterBase = z.looseObject({
   name: z.string()
-    .max(SKILL_NAME_MAX, `name tối đa ${SKILL_NAME_MAX} ký tự`)
-    .regex(/^[a-z0-9-]+$/, 'chỉ chữ-thường/số/gạch-nối')
-    .refine(s => !/claude|anthropic/i.test(s), 'không được chứa "claude"/"anthropic"'),
+    .max(SKILL_NAME_MAX, `name must be at most ${SKILL_NAME_MAX} characters`)
+    .regex(/^[a-z0-9-]+$/, 'only lowercase letters, numbers, and hyphens')
+    .refine(s => !/claude|anthropic/i.test(s), 'must not contain "claude"/"anthropic"'),
 
   description: z.string()
-    .min(1, 'description bắt buộc')
-    .max(SKILL_DESC_MAX, `description tối đa ${SKILL_DESC_MAX} ký tự`),
+    .min(1, 'description is required')
+    .max(SKILL_DESC_MAX, `description must be at most ${SKILL_DESC_MAX} characters`),
 
   'disable-model-invocation': z.boolean().optional(),
   'user-invocable': z.boolean().optional(),
@@ -19,7 +19,7 @@ const skillFrontmatterBase = z.object({
   'x-tags': z.array(z.string()).default([]),
 
   'x-version': z.string()
-    .regex(/^\d+\.\d+\.\d+$/, 'x-version phải là semver (vd 1.2.3)')
+    .regex(/^\d+\.\d+\.\d+$/, 'x-version must be semver (e.g. 1.2.3)')
     .default('0.1.0'),
 
   'x-roles': z.array(z.enum(ROLES)).default([]),
@@ -32,13 +32,12 @@ const skillFrontmatterBase = z.object({
 const knownKeys = new Set(Object.keys(skillFrontmatterBase.shape));
 
 export const SkillFrontmatterSchema = skillFrontmatterBase
-  .passthrough()
   .superRefine((data, ctx) => {
     for (const key of Object.keys(data)) {
       if (!key.startsWith('x-') && !knownKeys.has(key)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Key lạ không bắt đầu bằng "x-": "${key}"`,
+          code: 'custom',
+          message: `Unknown key does not start with "x-": "${key}"`,
           path: [key],
         });
       }

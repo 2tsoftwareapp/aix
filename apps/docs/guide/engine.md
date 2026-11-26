@@ -60,6 +60,21 @@ recheck replaces earlier success. Output changing during the check fails verific
 must be checked again when stable. An arbitrary command exiting zero is not independent
 proof of requirements. Nothing is automatically shipped or copied to project source.
 
+### Desktop verification security model
+
+The desktop app applies additional controls before running the user-confirmed command:
+only exact test-runner presets (`pnpm test`, `npm test`, `pytest`, `vitest`, ...), no shell
+(`execFile` with `shell: false`), no path separators in the binary, whitelisted flags or
+sandbox-relative target paths only, a 30 second timeout, and `generated/` as the working
+directory. Child processes receive a **minimal scrubbed environment** — provider credentials
+(`AIX_API_KEY`, `AIX_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, ...) held by the main process are
+never forwarded to generated code.
+
+These controls are command-injection and credential-leak hygiene, **not an OS sandbox**.
+The command still executes with your operating-system user permissions and can reach anything
+your user can reach. For untrusted or high-volume autonomous generation, run verification
+inside a disposable container or OS-level sandbox instead.
+
 ## API
 
 ```typescript

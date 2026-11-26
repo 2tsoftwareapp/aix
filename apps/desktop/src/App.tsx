@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AppShell } from "@astryxdesign/core/AppShell";
-import { HStack, StackItem } from "@astryxdesign/core/Layout";
+import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
 import { Card } from "@astryxdesign/core/Card";
 import { ResizeHandle, useResizable } from "@astryxdesign/core/Resizable";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { PanelRightOpen } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
@@ -28,6 +30,13 @@ export function App() {
     maxSize: 720,
     autoSaveId: "aix-artifact-panel",
   });
+  const [artifactCollapsed, setArtifactCollapsed] = useState(() => localStorage.getItem("aix-artifact-collapsed") === "1");
+  const toggleArtifact = () => {
+    setArtifactCollapsed((prev) => {
+      localStorage.setItem("aix-artifact-collapsed", prev ? "0" : "1");
+      return !prev;
+    });
+  };
 
   const refreshPipeline = useCallback(
     async (root: string, selectNewest = false) => {
@@ -99,8 +108,6 @@ export function App() {
         contentPadding={0}
         sideNav={
           <Sidebar
-            activeStep={activeStep}
-            onSelectStep={setActiveStep}
             projectRoot={projectRoot}
             onOpenProject={openProject}
             pipeline={pipeline}
@@ -114,6 +121,8 @@ export function App() {
           <StackItem size="fill">
             <ChatPanel
               step={activeStep}
+              pipeline={pipeline}
+              onSelectStep={setActiveStep}
               projectRoot={projectRoot}
               featureSlug={activeFeature}
               onStepDone={handleStepDone}
@@ -121,24 +130,40 @@ export function App() {
               onOpenSetup={() => setShowSetup(true)}
             />
           </StackItem>
-          <ResizeHandle
-            direction="horizontal"
-            resizable={artifactResize.props}
-            isReversed
-            hasDivider
-            label="Resize artifact panel"
-          />
-          <StackItem size="static" style={{ width: artifactResize.size }}>
-            <Card variant="transparent" padding={0} width="100%" height="100%">
-              <ArtifactPanel
-                step={activeStep}
-                projectRoot={projectRoot}
-                featureSlug={activeFeature}
-                refreshToken={refreshToken}
-                checklists={activeChecklists}
-              />
-            </Card>
-          </StackItem>
+          {!artifactCollapsed && (
+            <ResizeHandle
+              direction="horizontal"
+              resizable={artifactResize.props}
+              isReversed
+              hasDivider
+              label="Resize artifact panel"
+            />
+          )}
+          {artifactCollapsed ? (
+            <StackItem size="static" style={{ width: 40 }}>
+              <VStack padding={2} hAlign="center">
+                <IconButton
+                  icon={<PanelRightOpen size={14} />}
+                  label="Expand artifact panel"
+                  size="sm"
+                  onClick={toggleArtifact}
+                />
+              </VStack>
+            </StackItem>
+          ) : (
+            <StackItem size="static" style={{ width: artifactResize.size }}>
+              <Card variant="transparent" padding={0} width="100%" height="100%">
+                <ArtifactPanel
+                  step={activeStep}
+                  projectRoot={projectRoot}
+                  featureSlug={activeFeature}
+                  refreshToken={refreshToken}
+                  checklists={activeChecklists}
+                  onCollapse={toggleArtifact}
+                />
+              </Card>
+            </StackItem>
+          )}
         </HStack>
       </AppShell>
       <ProviderSetup isOpen={showSetup} onClose={() => setShowSetup(false)} />
