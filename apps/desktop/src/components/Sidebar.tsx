@@ -224,12 +224,21 @@ export function Sidebar({
                 key={step.id}
                 onClick={() => onSelectStep(step.id)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
+                  "relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
                   active
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                 )}
               >
+                {i < STEPS.length - 1 && (
+                  <span
+                    className={cn(
+                      "absolute left-[17px] top-[26px] h-[14px] w-px",
+                      st === "done" ? "bg-primary/40" : "bg-border"
+                    )}
+                    aria-hidden
+                  />
+                )}
                 <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
                   {st === "done" ? (
                     <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary/20">

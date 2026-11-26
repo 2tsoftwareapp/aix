@@ -4,7 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import Markdown from "react-markdown";
 import {
   Send, Square, Loader2, ShieldQuestion, FileText, CheckCircle2, XCircle,
-  Wrench, AlertTriangle, Ban, Sprout, KeyRound, FolderOpen,
+  Wrench,
+  Sparkles, AlertTriangle, Ban, Sprout, KeyRound, FolderOpen,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -366,29 +367,41 @@ export function ChatPanel({
                     <code className="rounded bg-secondary px-1 py-0.5 font-mono text-[11px] text-primary">
                       /speckit.{step}
                     </code>{" "}
-                    in the composer below. ⌘↵ or Ctrl+Enter to run.
+                    in the composer below. Enter to run, Shift+Enter for a newline.
                   </p>
                 </>
               )}
             </div>
           )}
-          {messages.map((m, i) =>
-            m.role === "system" ? (
+          {messages.map((m, i) => {
+            const isLastAssistant = m.role === "assistant" && i === messages.length - 1;
+            return m.role === "system" ? (
               <SystemLine key={i} msg={m} />
             ) : m.role === "user" ? (
-              <div key={i} className="ml-12 rounded-lg bg-secondary px-3.5 py-2.5 text-sm animate-fade-in">
-                {m.text}
+              <div key={i} className="ml-12 animate-fade-in">
+                <p className="mb-1 text-right text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">you</p>
+                <div className="rounded-lg rounded-tr-sm bg-secondary px-3.5 py-2.5 text-sm">
+                  {m.text}
+                </div>
               </div>
             ) : (
-              <div key={i} className="mr-8 artifact-markdown animate-fade-in">
-                <Markdown>{m.text}</Markdown>
+              <div key={i} className="mr-8 animate-fade-in">
+                <p className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
+                  <Sparkles className="h-2.5 w-2.5 text-primary/70" /> assistant
+                </p>
+                <div className="artifact-markdown">
+                  <Markdown>{m.text}</Markdown>
+                  {isLastAssistant && running && (
+                    <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse rounded-[1px] bg-primary" />
+                  )}
+                </div>
               </div>
-            )
-          )}
-          {running && (
+            );
+          })}
+          {running && messages[messages.length - 1]?.role !== "assistant" && (
             <div className="flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              streaming…
+              thinking…
             </div>
           )}
           {approvals.map((a) => (
@@ -402,9 +415,19 @@ export function ChatPanel({
         <div className="mx-auto max-w-2xl">
           <div className="rounded-lg border border-input bg-card transition-colors focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-ring/30">
             <textarea
+              ref={(el) => {
+                if (el) {
+                  el.style.height = "auto";
+                  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+                }
+              }}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              rows={3}
+              onChange={(e) => {
+                setInput(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+              }}
+              rows={1}
               disabled={!ready || running || gateBlocked}
               placeholder={
                 gateBlocked
@@ -415,12 +438,15 @@ export function ChatPanel({
               }
               className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  run();
+                }
               }}
             />
             <div className="flex items-center justify-between px-2.5 pb-2">
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
-                <FileText className="h-3 w-3" /> Ctrl+Enter to run
+                <FileText className="h-3 w-3" /> Enter to run · Shift+Enter for newline
               </span>
               {running ? (
                 <Button
