@@ -326,49 +326,6 @@ export function ChatPanel({
           {featureSlug && (
             <Badge variant="secondary" className="font-mono">{featureSlug}</Badge>
           )}
-          <Select
-            value={providerId}
-            onValueChange={(p) => { setProviderId(p); setModel(MODEL_OPTIONS[p][0]); }}
-          >
-            <SelectTrigger className="w-[104px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {["anthropic", "openai", "openrouter", "qwen"].map((p) => (
-                <SelectItem key={p} value={p}>
-                  <span className="flex items-center gap-1.5">
-                    <span className={keyStatus[p] ? "text-primary" : "text-muted-foreground/30"}>●</span>
-                    {p}
-                    {!keyStatus[p] && <span className="text-muted-foreground/40">(no key)</span>}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Combobox
-            value={model}
-            onChange={setModel}
-            options={
-              liveModels[providerId]?.length
-                ? [...MODEL_OPTIONS[providerId].filter((m) => liveModels[providerId].includes(m)),
-                   ...liveModels[providerId].filter((m) => !MODEL_OPTIONS[providerId].includes(m))]
-                : MODEL_OPTIONS[providerId]
-            }
-            className="w-[200px]"
-          />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div>
-                <Select value={approvalMode} onValueChange={setApprovalMode}>
-                  <SelectTrigger className="w-[104px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ask">ask</SelectItem>
-                    <SelectItem value="auto-edit">auto-edit</SelectItem>
-                    <SelectItem value="full-auto">full-auto</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>{APPROVAL_MODE_HINTS[approvalMode]}</TooltipContent>
-          </Tooltip>
         </div>
       </header>
 
@@ -499,10 +456,56 @@ export function ChatPanel({
                 }
               }}
             />
-            <div className="flex items-center justify-between px-2.5 pb-2">
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
-                <FileText className="h-3 w-3" /> Enter to run · Shift+Enter for newline
-              </span>
+            <div className="flex items-center justify-between gap-2 px-2.5 pb-2">
+              <div className="flex min-w-0 items-center gap-1">
+                <Select
+                  value={providerId}
+                  onValueChange={(p) => { setProviderId(p); setModel(MODEL_OPTIONS[p][0]); }}
+                >
+                  <SelectTrigger className="h-7 w-[92px] border-transparent bg-transparent px-2 text-xs shadow-none hover:bg-secondary">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["anthropic", "openai", "openrouter", "qwen"].map((p) => (
+                      <SelectItem key={p} value={p}>
+                        <span className="flex items-center gap-1.5">
+                          <span className={keyStatus[p] ? "text-primary" : "text-muted-foreground/30"}>●</span>
+                          {p}
+                          {!keyStatus[p] && <span className="text-muted-foreground/40">(no key)</span>}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Combobox
+                  value={model}
+                  onChange={setModel}
+                  options={
+                    liveModels[providerId]?.length
+                      ? [...MODEL_OPTIONS[providerId].filter((m) => liveModels[providerId].includes(m)),
+                         ...liveModels[providerId].filter((m) => !MODEL_OPTIONS[providerId].includes(m))]
+                      : MODEL_OPTIONS[providerId]
+                  }
+                  className="h-7 w-[170px] border-transparent bg-transparent px-2 text-xs shadow-none hover:bg-secondary"
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div>
+                      <Select value={approvalMode} onValueChange={setApprovalMode}>
+                        <SelectTrigger className="h-7 w-[96px] border-transparent bg-transparent px-2 text-xs shadow-none hover:bg-secondary">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ask">ask</SelectItem>
+                          <SelectItem value="auto-edit">auto-edit</SelectItem>
+                          <SelectItem value="full-auto">full-auto</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>{APPROVAL_MODE_HINTS[approvalMode]}</TooltipContent>
+                </Tooltip>
+              </div>
               {running ? (
                 <Button
                   variant="destructive"
