@@ -10,7 +10,7 @@ import type { PipelineState, StepId } from "./types";
 import { addRecent, getLastProject } from "./lib/recents";
 
 export function App() {
-  const [activeStep, setActiveStep] = useState<StepId>("specify");
+  const [activeStep, setActiveStep] = useState<StepId>((localStorage.getItem("aix-step") as never) ?? "specify");
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
@@ -27,7 +27,10 @@ export function App() {
         if (state.features.length > 0) {
           const stillExists = activeFeature && state.features.some((f) => f.slug === activeFeature);
           if (!stillExists || selectNewest) {
-            setActiveFeature(state.features[state.features.length - 1].slug);
+            // restore the remembered feature when it still exists in the scan
+            const remembered = localStorage.getItem("aix-feature");
+            const valid = remembered && state.features.some((f) => f.slug === remembered);
+            setActiveFeature(valid ? remembered : state.features[state.features.length - 1].slug);
           }
         }
       } catch (e) {
@@ -37,6 +40,8 @@ export function App() {
     [activeFeature]
   );
 
+  useEffect(() => { localStorage.setItem("aix-step", activeStep); }, [activeStep]);
+  useEffect(() => { if (activeFeature) localStorage.setItem("aix-feature", activeFeature); }, [activeFeature]);
   useEffect(() => {
     // any configured provider counts — not just anthropic
     Promise.all(

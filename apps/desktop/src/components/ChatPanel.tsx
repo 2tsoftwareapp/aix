@@ -138,9 +138,9 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [running, setRunning] = useState(false);
-  const [providerId, setProviderId] = useState("anthropic");
-  const [model, setModel] = useState("claude-sonnet-4-5");
-  const [approvalMode, setApprovalMode] = useState("ask");
+  const [providerId, setProviderId] = useState(() => localStorage.getItem("aix-provider") ?? "anthropic");
+  const [model, setModel] = useState(() => localStorage.getItem("aix-model") ?? "claude-sonnet-4-5");
+  const [approvalMode, setApprovalMode] = useState(() => localStorage.getItem("aix-approval-mode") ?? "ask");
   const keyStatus = useKeyStatus();
   const providerHasKey = !!keyStatus[providerId];
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
@@ -185,6 +185,10 @@ export function ChatPanel({
       })
       .catch(() => { /* static fallback lists remain */ });
   }, []);
+
+  useEffect(() => { localStorage.setItem("aix-provider", providerId); }, [providerId]);
+  useEffect(() => { localStorage.setItem("aix-model", model); }, [model]);
+  useEffect(() => { localStorage.setItem("aix-approval-mode", approvalMode); }, [approvalMode]);
 
   useEffect(() => {
     if (!projectRoot) return;
