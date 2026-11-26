@@ -213,6 +213,16 @@ pub fn tool_defs() -> Vec<providers::ToolDef> {
     ]
 }
 
+/// Read-only subset for artifact steps: exploration without write or shell access.
+/// The artifact write itself stays on the runner-controlled path, so these steps
+/// can look at the repository but can never mutate it.
+pub fn read_only_tool_defs() -> Vec<providers::ToolDef> {
+    tool_defs()
+        .into_iter()
+        .filter(|d| d.name == "read_file" || d.name == "list_files")
+        .collect()
+}
+
 pub fn tool_requires_approval(name: &str, mode: ApprovalMode) -> bool {
     match mode {
         ApprovalMode::FullAuto => false,

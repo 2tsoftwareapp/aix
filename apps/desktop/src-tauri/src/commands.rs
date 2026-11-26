@@ -352,10 +352,12 @@ pub async fn run_step(
         _ => executor::ApprovalMode::Ask,
     };
     let denylist = executor::default_denylist();
-    // Implement is the execution step — it gets file/shell tools and the agent loop.
-    // Artifact steps stay single-shot: their output IS the artifact.
-    let use_tools = step == Step::Implement;
-    let tools = if use_tools { executor::tool_defs() } else { vec![] };
+    // Every step runs through the agent loop. Implement gets the full file/shell
+    // toolset; artifact steps get read-only exploration tools — speckit templates
+    // make models want to inspect the repository first, and without real tools
+    // tool-trained models hallucinate tool-call markup as plain text.
+    let is_implement = step == Step::Implement;
+    let tools = if is_implement { executor::tool_defs() } else { executor::read_only_tool_defs() };
 
     struct TauriExecutor<'a> {
         app: &'a AppHandle,
@@ -455,10 +457,16 @@ pub async fn run_step(
     };
     let loop_config = agent_loop::LoopConfig {
         model: input.model.clone(),
-        system: system.clone(),
+        system: if is_implement {
+            system.clone()
+        } else {
+            format!(
+                "{system}\n\nYou have read-only tools (read_file, list_files) to explore the repository before writing. Use them when context is missing. Your FINAL message must be the complete artifact document itself — markdown only, no tool syntax, no commentary, no markup like <tool_call>."
+            )
+        },
         tools,
         max_tokens: 8192,
-        max_iterations: 40,
+        max_iterations: if is_implement { 40 } else { 15 },
     };
 
     let emit_ref = &emit;
@@ -504,7 +512,7 @@ pub async fn run_step(
         if !final_text.trim().is_empty() {
             let writes = vec![speckit_core::runner::ArtifactWrite {
                 rel_path: rel.to_string(),
-                content: strip_code_fence(&final_text),
+                content: strip_code_fence(&strip_pseudo_tool_calls(&final_text)),
             }];
             match StepRunner::sanitize_writes(step, writes) {
                 Ok(accepted) => {
@@ -561,6 +569,34 @@ pub async fn run_step(
 }
 
 /// Strip a single outer markdown code fence if the model wrapped the artifact.
+
+/// Some tool-trained models (qwen/llama fine-tunes) emit tool calls as literal
+/// text markup even when real tools are provided. Never let that noise reach
+/// an artifact on disk.
+fn strip_pseudo_tool_calls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        match rest.find("<tool_call>") {
+            Some(start) => {
+                out.push_str(&rest[..start]);
+                match rest[start..].find("</tool_call>") {
+                    Some(end) => rest = &rest[start + end + "</tool_call>".len()..],
+                    None => {
+                        rest = "";
+                        break;
+                    }
+                }
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn strip_code_fence(text: &str) -> String {
     let t = text.trim();
     if t.starts_with("```") {
@@ -712,4 +748,19 @@ pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::M
     providers::models::fetch_models(&provider_id, &client)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_strip_pseudo_tool_calls() {
+        let input = "# Spec\n\n<tool_call> <function=Bash> <parameter=command>ls</parameter> </function> </tool_call>\n\nReal content here.";
+        let out = super::strip_pseudo_tool_calls(input);
+        assert!(!out.contains("tool_call"));
+        assert!(out.contains("Real content here."));
+        assert!(out.contains("# Spec"));
+        // unterminated markup drops the tail
+        let unterminated = "good\n<tool_call> never closed";
+        assert_eq!(super::strip_pseudo_tool_calls(unterminated), "good\n");
+    }
 }
