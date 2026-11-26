@@ -214,6 +214,17 @@ export function Sidebar({
         )}
 
         <SectionLabel>Pipeline</SectionLabel>
+        {activeFeature ? (
+          <div className="mx-2 mb-1.5 flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-2 py-1.5">
+            <FileText className="h-3 w-3 shrink-0 text-primary/80" />
+            <span className="truncate font-mono text-[11px] text-primary/90">{activeFeature}</span>
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/60">steps apply to this feature</span>
+          </div>
+        ) : (
+          <div className="mx-2 mb-1.5 rounded-md border border-border/60 px-2 py-1.5 text-[11px] text-muted-foreground/60">
+            no feature yet — specify creates the first one
+          </div>
+        )}
         <nav className="px-2 pb-2">
           {STEPS.map((step, i) => {
             const active = step.id === activeStep;
@@ -230,6 +241,9 @@ export function Sidebar({
                     : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                 )}
               >
+                {active && (
+                  <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" aria-hidden />
+                )}
                 {i < STEPS.length - 1 && (
                   <span
                     className={cn(

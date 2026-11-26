@@ -146,7 +146,7 @@ export function ArtifactPanel({
 
   return (
     <aside className="flex h-full flex-col bg-card/30">
-      <header className="flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-2">
+      <header className="flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-2" title="Artifacts — documents the agent writes land here for review">
         {TABS.map((t) => (
           <button
             key={t.rel}
@@ -199,7 +199,7 @@ export function ArtifactPanel({
           <EmptyState
             icon={FolderOpen}
             title="No project open"
-            body="Open a project folder to view its spec-driven artifacts here."
+            body="This panel is the review surface: documents the agent writes — spec, plan, tasks, checklists — land here for you to read, edit, and approve."
           />
         ) : content !== null && isChecklist ? (
           <div className="flex flex-1 flex-col overflow-hidden">
@@ -282,9 +282,9 @@ export function ArtifactPanel({
             <EmptyState
               icon={FileText}
               title={`${rel} doesn't exist yet`}
-              body={`It will appear here after the ${
+              body={`Agent output lands here. It will appear after the ${
                 rel === "spec.md" ? "specify" : rel === "plan.md" ? "plan" : "tasks"
-              } step runs.`}
+              } step runs — then you can review and edit it directly.`}
             />
           ) : error ? (
             <EmptyState icon={FileText} title="Couldn't load artifact" body={error} />
