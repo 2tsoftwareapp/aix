@@ -1,8 +1,8 @@
 mod commands;
 
 use commands::{
-    check_gate, has_provider_key, respond_approval, run_step, scan_pipeline, store_provider_key,
-    ApprovalRegistry,
+    check_gate, has_provider_key, read_artifact, respond_approval, run_step, scan_pipeline,
+    store_provider_key, write_artifact, ApprovalRegistry,
 };
 use speckit_core::TemplateStore;
 
@@ -29,6 +29,8 @@ pub fn run() {
             respond_approval,
             store_provider_key,
             has_provider_key,
+            read_artifact,
+            write_artifact,
             template_count,
         ])
         .run(tauri::generate_context!())

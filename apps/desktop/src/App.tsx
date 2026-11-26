@@ -13,6 +13,7 @@ export function App() {
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const refreshPipeline = useCallback(async (root: string) => {
     try {
@@ -55,9 +56,17 @@ export function App() {
           projectRoot={projectRoot}
           featureSlug={activeFeature}
           hasKey={hasKey}
-          onStepDone={() => projectRoot && refreshPipeline(projectRoot)}
+          onStepDone={() => {
+            if (projectRoot) refreshPipeline(projectRoot);
+            setRefreshToken((t) => t + 1);
+          }}
         />
-        <ArtifactPanel step={activeStep} projectRoot={projectRoot} featureSlug={activeFeature} />
+        <ArtifactPanel
+          step={activeStep}
+          projectRoot={projectRoot}
+          featureSlug={activeFeature}
+          refreshToken={refreshToken}
+        />
       </main>
       {showSetup && (
         <ProviderSetup

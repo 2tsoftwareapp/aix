@@ -292,6 +292,32 @@ pub async fn execute_tool(
     }
 }
 
+/// Append one entry to the project audit log (.speckit-desktop/audit.jsonl).
+/// Best-effort: audit failure never blocks execution, but execution never skips auditing.
+pub fn audit_append(root: &Path, action: &str, detail: &str, approved: bool) {
+    let dir = root.join(".speckit-desktop");
+    let _ = std::fs::create_dir_all(&dir);
+    let entry = AuditEntry {
+        ts_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        action: action.into(),
+        detail: detail.into(),
+        approved,
+    };
+    if let Ok(line) = serde_json::to_string(&entry) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("audit.jsonl"))
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 fn list_recursive(dir: &Path, root: &Path, out: &mut Vec<String>, depth: usize) -> Result<(), ExecutorError> {
     if out.len() >= 200 || depth > 8 {
         return Ok(());

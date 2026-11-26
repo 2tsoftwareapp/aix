@@ -394,6 +394,7 @@ pub async fn run_step(
                 true
             };
 
+            executor::audit_append(&project_root, &call.name, &detail, approved);
             let result = if approved {
                 match executor::execute_tool(&project_root, &call.name, &call.input, &denylist).await {
                     Ok(out) => {
@@ -494,6 +495,55 @@ fn strip_code_fence(text: &str) -> String {
 // Credential is re-exported for future OAuth wiring; silence unused warning for now.
 #[allow(unused)]
 fn _cred_marker(_: Credential) {}
+
+#[tauri::command]
+pub fn read_artifact(
+    project_root: String,
+    feature_slug: Option<String>,
+    rel_path: String,
+) -> Result<String, String> {
+    let root = PathBuf::from(&project_root);
+    let base = if rel_path.starts_with(".specify") {
+        root
+    } else {
+        match feature_slug {
+            Some(slug) => root.join("specs").join(slug),
+            None => {
+                let state = PipelineState::scan(&project_root);
+                match state.features.last() {
+                    Some(f) => f.dir.clone(),
+                    None => return Err("no feature yet".into()),
+                }
+            }
+        }
+    };
+    let path = executor::resolve_scoped(&base, &rel_path).map_err(|e| e.to_string())?;
+    std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[tauri::command]
+pub fn write_artifact(
+    project_root: String,
+    feature_slug: Option<String>,
+    rel_path: String,
+    content: String,
+) -> Result<(), String> {
+    // Human edits bypass agent sanitization — the reviewer owns the artifact.
+    let root = PathBuf::from(&project_root);
+    let base = if rel_path.starts_with(".specify") {
+        root
+    } else {
+        match feature_slug {
+            Some(slug) => root.join("specs").join(slug),
+            None => return Err("feature slug required".into()),
+        }
+    };
+    let path = executor::resolve_scoped(&base, &rel_path).map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
 
 fn summarize_tool_call(call: &providers::ToolCall) -> String {
     match call.name.as_str() {
