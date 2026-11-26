@@ -48,11 +48,13 @@ export function ArtifactPanel({
   projectRoot,
   featureSlug,
   refreshToken,
+  checklists,
 }: {
   step: StepId;
   projectRoot: string | null;
   featureSlug: string | null;
   refreshToken: number;
+  checklists: string[];
 }) {
   const [rel, setRel] = useState<string | null>(ARTIFACT_FOR_STEP[step] ?? "spec.md");
   const [content, setContent] = useState<string | null>(null);
@@ -64,8 +66,13 @@ export function ArtifactPanel({
 
   useEffect(() => {
     const forStep = ARTIFACT_FOR_STEP[step];
-    if (forStep) setRel(forStep);
-  }, [step]);
+    if (!forStep) return;
+    if (step === "checklist" && checklists.length > 0) {
+      setRel(`checklists/${checklists[0]}`);
+    } else {
+      setRel(forStep);
+    }
+  }, [step, checklists]);
 
   const load = useCallback(async () => {
     if (!projectRoot || !rel) return;

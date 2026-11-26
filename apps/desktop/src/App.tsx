@@ -96,6 +96,9 @@ export function App() {
               projectRoot={projectRoot}
               featureSlug={activeFeature}
               refreshToken={refreshToken}
+              checklists={
+                pipeline?.features.find((f) => f.slug === activeFeature)?.artifacts.checklists.map((c) => c.name) ?? []
+              }
             />
           </Panel>
         </PanelGroup>

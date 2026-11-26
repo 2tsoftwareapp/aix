@@ -217,7 +217,9 @@ pub fn tool_requires_approval(name: &str, mode: ApprovalMode) -> bool {
     match mode {
         ApprovalMode::FullAuto => false,
         ApprovalMode::AutoEdit => name == "run_shell",
-        ApprovalMode::Ask => true,
+        // ask gates mutations only — read_file/list_files are non-destructive and
+        // approving every read makes implement unusable (dozens of clicks per run)
+        ApprovalMode::Ask => name == "write_file" || name == "run_shell",
     }
 }
 
@@ -393,7 +395,10 @@ mod tool_tests {
     #[test]
     fn approval_matrix() {
         assert!(tool_requires_approval("write_file", ApprovalMode::Ask));
-        assert!(tool_requires_approval("read_file", ApprovalMode::Ask));
+        assert!(tool_requires_approval("run_shell", ApprovalMode::Ask));
+        // reads are non-destructive — never gated, even in ask mode
+        assert!(!tool_requires_approval("read_file", ApprovalMode::Ask));
+        assert!(!tool_requires_approval("list_files", ApprovalMode::Ask));
         assert!(!tool_requires_approval("write_file", ApprovalMode::AutoEdit));
         assert!(tool_requires_approval("run_shell", ApprovalMode::AutoEdit));
         assert!(!tool_requires_approval("run_shell", ApprovalMode::FullAuto));
