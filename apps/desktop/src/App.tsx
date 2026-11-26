@@ -1,22 +1,72 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
-import type { StepId } from "./types";
+import { ProviderSetup } from "./components/ProviderSetup";
+import type { PipelineState, StepId } from "./types";
 
 export function App() {
   const [activeStep, setActiveStep] = useState<StepId>("specify");
-  const [artifactOpen, setArtifactOpen] = useState(true);
+  const [projectRoot, setProjectRoot] = useState<string | null>(null);
+  const [pipeline, setPipeline] = useState<PipelineState | null>(null);
+  const [activeFeature, setActiveFeature] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+
+  const refreshPipeline = useCallback(async (root: string) => {
+    try {
+      const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
+      setPipeline(state);
+      if (state.features.length > 0 && !activeFeature) {
+        setActiveFeature(state.features[state.features.length - 1].slug);
+      }
+    } catch (e) {
+      console.error("scan failed", e);
+    }
+  }, [activeFeature]);
+
+  useEffect(() => {
+    invoke<boolean>("has_provider_key", { providerId: "anthropic" }).then((ok) => {
+      setHasKey(ok);
+      if (!ok) setShowSetup(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (projectRoot) refreshPipeline(projectRoot);
+  }, [projectRoot, refreshPipeline]);
 
   return (
     <div className="flex h-full bg-surface text-ink">
-      <Sidebar activeStep={activeStep} onSelectStep={setActiveStep} />
+      <Sidebar
+        activeStep={activeStep}
+        onSelectStep={setActiveStep}
+        projectRoot={projectRoot}
+        onOpenProject={setProjectRoot}
+        pipeline={pipeline}
+        activeFeature={activeFeature}
+        onSelectFeature={setActiveFeature}
+        onOpenSetup={() => setShowSetup(true)}
+      />
       <main className="flex flex-1 min-w-0">
-        <ChatPanel step={activeStep} />
-        {artifactOpen && (
-          <ArtifactPanel step={activeStep} onClose={() => setArtifactOpen(false)} />
-        )}
+        <ChatPanel
+          step={activeStep}
+          projectRoot={projectRoot}
+          featureSlug={activeFeature}
+          hasKey={hasKey}
+          onStepDone={() => projectRoot && refreshPipeline(projectRoot)}
+        />
+        <ArtifactPanel step={activeStep} projectRoot={projectRoot} featureSlug={activeFeature} />
       </main>
+      {showSetup && (
+        <ProviderSetup
+          onDone={() => {
+            setShowSetup(false);
+            setHasKey(true);
+          }}
+        />
+      )}
     </div>
   );
 }

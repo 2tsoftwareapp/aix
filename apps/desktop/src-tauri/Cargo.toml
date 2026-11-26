@@ -39,6 +39,7 @@ tokio = { workspace = true }
 speckit-core = { path = "crates/speckit-core" }
 providers = { path = "crates/providers" }
 executor = { path = "crates/executor" }
+futures-util = "0.3"
 app-state = { path = "crates/app-state" }
 
 [profile.release]

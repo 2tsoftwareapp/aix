@@ -1,6 +1,7 @@
 import type { StepId } from "../types";
 
 const ARTIFACT_FOR_STEP: Partial<Record<StepId, string>> = {
+  constitution: ".specify/memory/constitution.md",
   specify: "spec.md",
   plan: "plan.md",
   tasks: "tasks.md",
@@ -9,10 +10,12 @@ const ARTIFACT_FOR_STEP: Partial<Record<StepId, string>> = {
 
 export function ArtifactPanel({
   step,
-  onClose,
+  projectRoot,
+  featureSlug,
 }: {
   step: StepId;
-  onClose: () => void;
+  projectRoot: string | null;
+  featureSlug: string | null;
 }) {
   const artifact = ARTIFACT_FOR_STEP[step];
   return (
@@ -21,27 +24,34 @@ export function ArtifactPanel({
         <h2 className="text-sm font-medium">
           {artifact ? (
             <>
-              Artifact:{" "}
-              <code className="font-mono text-xs text-accent">{artifact}</code>
+              Artifact: <code className="font-mono text-xs text-accent">{artifact}</code>
             </>
           ) : (
             "Artifacts"
           )}
         </h2>
-        <button
-          onClick={onClose}
-          className="text-ink-faint hover:text-ink text-lg leading-none"
-        >
-          ×
-        </button>
       </header>
       <div className="flex-1 overflow-y-auto px-4 py-4 text-sm text-ink-faint">
-        <p>No project open.</p>
-        <p className="mt-2 text-xs">
-          Artifacts render here with edit + approve controls once a
-          <code className="mx-1 rounded bg-surface-overlay px-1 font-mono">.specify/</code>
-          workspace is active.
-        </p>
+        {!projectRoot ? (
+          <p>No project open.</p>
+        ) : (
+          <div className="space-y-2 text-xs">
+            <p>
+              Project: <span className="font-mono text-ink-dim">{projectRoot}</span>
+            </p>
+            {featureSlug && (
+              <p>
+                Feature: <span className="font-mono text-ink-dim">{featureSlug}</span>
+              </p>
+            )}
+            <p className="text-ink-faint">
+              Live artifact rendering with edit + approve controls lands in M4 (TASK-17).
+              Artifacts are being written to disk by run_step already — check
+              <code className="mx-1 rounded bg-surface-overlay px-1 font-mono">specs/</code>
+              in your project.
+            </p>
+          </div>
+        )}
       </div>
     </aside>
   );

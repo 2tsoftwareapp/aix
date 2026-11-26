@@ -23,6 +23,7 @@ version = "0.1.0"
 dependencies = [
  "app-state",
  "executor",
+ "futures-util",
  "providers",
  "serde",
  "serde_json",
