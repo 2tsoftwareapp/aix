@@ -11,14 +11,23 @@ import { Badge } from "./ui/badge";
 import { Card, CardContent } from "./ui/card";
 import { ScrollArea } from "./ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Combobox } from "./ui/combobox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import type { StepId } from "../types";
 
 const MODEL_OPTIONS: Record<string, string[]> = {
-  anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
-  openai: ["gpt-5.2", "gpt-5.2-mini", "o4-mini"],
-  openrouter: ["anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "google/gemini-3-pro"],
-  qwen: ["qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus"],
+  anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4", "claude-opus-4-1"],
+  openai: ["gpt-5.2", "gpt-5.2-mini", "gpt-5.1", "gpt-5-mini", "o4-mini", "gpt-4.1"],
+  openrouter: [
+    "anthropic/claude-opus-4-5",
+    "anthropic/claude-sonnet-4-5",
+    "openai/gpt-5.2",
+    "google/gemini-3-pro",
+    "deepseek/deepseek-v3.2",
+    "qwen/qwen3-max",
+    "x-ai/grok-4.1",
+  ],
+  qwen: ["qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus", "qwen-max-latest", "qwen-plus-latest", "qwen-flash"],
 };
 
 const STEP_HINTS: Record<StepId, string> = {
@@ -130,6 +139,7 @@ export function ChatPanel({
   const [model, setModel] = useState("claude-sonnet-4-5");
   const [approvalMode, setApprovalMode] = useState("ask");
   const [providerHasKey, setProviderHasKey] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
 
   useEffect(() => {
@@ -144,6 +154,14 @@ export function ChatPanel({
   useEffect(() => {
     invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey).catch(() => setProviderHasKey(false));
   }, [providerId, hasKey]);
+
+  useEffect(() => {
+    Promise.all(
+      ["anthropic", "openai", "openrouter", "qwen"].map(
+        async (p) => [p, await invoke<boolean>("has_provider_key", { providerId: p }).catch(() => false)] as const
+      )
+    ).then((entries) => setKeyStatus(Object.fromEntries(entries)));
+  }, [hasKey]);
 
   // Transcript is per-context: switching step, project, or feature starts a clean
   // conversation. Otherwise stale messages — and live stream events from a run in
@@ -248,7 +266,7 @@ export function ChatPanel({
 
   return (
     <section className="flex h-full flex-1 flex-col min-w-0">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="min-w-0">
           <h1 className="text-sm font-medium capitalize">{step}</h1>
           <p className="truncate text-xs text-muted-foreground">{STEP_HINTS[step]}</p>
@@ -263,20 +281,23 @@ export function ChatPanel({
           >
             <SelectTrigger className="w-[104px]"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="anthropic">anthropic</SelectItem>
-              <SelectItem value="openai">openai</SelectItem>
-              <SelectItem value="openrouter">openrouter</SelectItem>
-              <SelectItem value="qwen">qwen</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={model} onValueChange={setModel}>
-            <SelectTrigger className="w-[170px] font-mono"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {MODEL_OPTIONS[providerId].map((m) => (
-                <SelectItem key={m} value={m} className="font-mono">{m}</SelectItem>
+              {["anthropic", "openai", "openrouter", "qwen"].map((p) => (
+                <SelectItem key={p} value={p}>
+                  <span className="flex items-center gap-1.5">
+                    <span className={keyStatus[p] ? "text-primary" : "text-muted-foreground/30"}>●</span>
+                    {p}
+                    {!keyStatus[p] && <span className="text-muted-foreground/40">(no key)</span>}
+                  </span>
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          <Combobox
+            value={model}
+            onChange={setModel}
+            options={MODEL_OPTIONS[providerId]}
+            className="w-[200px]"
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <div>

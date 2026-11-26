@@ -146,7 +146,7 @@ export function ArtifactPanel({
 
   return (
     <aside className="flex h-full flex-col bg-card/30">
-      <header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border px-2">
+      <header className="flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-2">
         {TABS.map((t) => (
           <button
             key={t.rel}

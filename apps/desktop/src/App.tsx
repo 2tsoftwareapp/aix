@@ -37,12 +37,16 @@ export function App() {
   );
 
   useEffect(() => {
-    invoke<boolean>("has_provider_key", { providerId: "anthropic" })
-      .then((ok) => {
-        setHasKey(ok);
-        if (!ok) setShowSetup(true);
-      })
-      .catch(() => setShowSetup(true));
+    // any configured provider counts — not just anthropic
+    Promise.all(
+      ["anthropic", "openai", "openrouter", "qwen"].map((p) =>
+        invoke<boolean>("has_provider_key", { providerId: p }).catch(() => false)
+      )
+    ).then((results) => {
+      const any = results.some(Boolean);
+      setHasKey(any);
+      if (!any) setShowSetup(true);
+    });
     const last = getLastProject();
     if (last) setProjectRoot(last);
   }, []);
