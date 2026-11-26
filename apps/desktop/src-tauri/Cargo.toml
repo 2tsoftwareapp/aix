@@ -46,6 +46,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 agent-loop = { path = "crates/agent-loop" }
 app-state = { path = "crates/app-state" }
 tauri-plugin-dialog = "2.8.4"
+similar = "3.2.1"
 
 [profile.release]
 panic = "unwind"

@@ -367,13 +367,7 @@ pub async fn run_step(
                     call.input
                         .get("content")
                         .and_then(serde_json::Value::as_str)
-                        .map(|c| {
-                            if c.len() > 2000 {
-                                format!("{}\n… [{} more bytes]", &c[..2000], c.len() - 2000)
-                            } else {
-                                c.to_string()
-                            }
-                        })
+                        .map(|c| write_preview(self.project_root, call.input.get("path").and_then(serde_json::Value::as_str).unwrap_or(""), c))
                 } else {
                     None
                 };
@@ -610,6 +604,42 @@ pub fn flip_checklist_item(
     std::fs::write(&path, flipped).map_err(|e| e.to_string())?;
     executor::audit_append(&root, "reviewer_checkbox_flip", &format!("{rel_path}:{line_index} → {checked}"), true);
     Ok(())
+}
+
+/// Approval preview for write_file: unified diff against the existing file when
+/// there is one (reviewers care about what changes), truncated new content otherwise.
+fn write_preview(root: &Path, rel: &str, content: &str) -> String {
+    let existing = executor::resolve_scoped(root, rel)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    match existing {
+        Some(old_text) if old_text != content => {
+            let diff = similar::TextDiff::from_lines(&old_text, content);
+            let mut out = String::new();
+            for change in diff.iter_all_changes() {
+                let sign = match change.tag() {
+                    similar::ChangeTag::Delete => "-",
+                    similar::ChangeTag::Insert => "+",
+                    similar::ChangeTag::Equal => " ",
+                };
+                out.push_str(sign);
+                out.push_str(&change.to_string());
+                if out.len() > 3000 {
+                    out.push_str("\n… [diff truncated]");
+                    break;
+                }
+            }
+            format!("diff against existing {rel}:\n{out}")
+        }
+        Some(_) => format!("{rel}: content unchanged"),
+        None => {
+            if content.len() > 2000 {
+                format!("new file:\n{}\n… [{} more bytes]", &content[..2000], content.len() - 2000)
+            } else {
+                format!("new file:\n{content}")
+            }
+        }
+    }
 }
 
 fn summarize_tool_call(call: &providers::ToolCall) -> String {
