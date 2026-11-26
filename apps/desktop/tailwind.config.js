@@ -1,24 +1,29 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: [
-    './src/renderer/**/*.{html,js,ts,jsx,tsx}',
-  ],
-  darkMode: 'class',
+  darkMode: "class",
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      fontFamily: {
-        sans: ['Plus Jakarta Sans', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
-      },
       colors: {
-        background: '#08090d',
-        surface: '#0e1017',
-        'surface-elevated': '#141720',
-        border: 'rgba(255, 255, 255, 0.05)',
-        primary: {
-          DEFAULT: '#3b82f6',
-          hover: '#2563eb',
+        surface: {
+          DEFAULT: "#1a1a18",
+          raised: "#232320",
+          overlay: "#2c2c28",
         },
+        edge: "#3a3a34",
+        ink: {
+          DEFAULT: "#e8e6e0",
+          dim: "#a3a099",
+          faint: "#6b6963",
+        },
+        accent: {
+          DEFAULT: "#d97757",
+          hover: "#e8896a",
+        },
+      },
+      fontFamily: {
+        sans: ["system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        mono: ["ui-monospace", "SF Mono", "Menlo", "monospace"],
       },
     },
   },

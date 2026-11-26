@@ -1,0 +1,3 @@
+upstream-commit: f2010547121b3351e4923fe467205079e4593a32
+upstream-repo: https://github.com/github/spec-kit
+vendored-at: 2026-11-26

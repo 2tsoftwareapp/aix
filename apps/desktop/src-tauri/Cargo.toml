@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    ".",
+    "crates/speckit-core",
+    "crates/providers",
+    "crates/executor",
+    "crates/app-state",
+]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+sha2 = "0.10"
+tracing = "0.1"
+
+[package]
+name = "aix-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "aix — speckit-native desktop AI agent"
+
+[lib]
+name = "aix_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+speckit-core = { path = "crates/speckit-core" }
+providers = { path = "crates/providers" }
+executor = { path = "crates/executor" }
+app-state = { path = "crates/app-state" }
+
+[profile.release]
+panic = "unwind"
+codegen-units = 1
+lto = true
+opt-level = "s"
