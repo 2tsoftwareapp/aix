@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   Scroll, Sprout, SearchCheck, Map, ClipboardCheck, ListTodo,
   ScanSearch, Hammer, RefreshCcw, Check, Lock, FolderOpen,
   Settings2, CircleCheck, CircleDot, FileText,
 } from "lucide-react";
-import { ScrollArea } from "./ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { cn } from "../lib/utils";
+import { SideNav, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
+import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
+import { Text } from "@astryxdesign/core/Text";
+import { Icon } from "@astryxdesign/core/Icon";
+import { Button } from "@astryxdesign/core/Button";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { Card } from "@astryxdesign/core/Card";
 import { getRecents } from "../lib/recents";
+import { chooseProjectDirectory } from "../lib/projectDialog";
 import type { PipelineState, StepId } from "../types";
 
 const STEP_ICONS: Record<StepId, typeof Scroll> = {
@@ -70,11 +72,29 @@ function stepStatus(
   }
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function StepEndContent({
+  status,
+  index,
+  gated,
+  progress,
+}: {
+  status: "done" | "partial" | "none";
+  index: number;
+  gated: boolean;
+  progress?: string;
+}) {
   return (
-    <div className="px-3 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-      {children}
-    </div>
+    <HStack gap={1} vAlign="center">
+      {progress && <Text type="code" size="2xs" color="secondary">{progress}</Text>}
+      {gated && <Icon icon={Lock} size="xsm" color="secondary" />}
+      {status === "done" ? (
+        <Icon icon={Check} size="xsm" color="accent" />
+      ) : status === "partial" ? (
+        <Icon icon={CircleDot} size="xsm" color="accent" />
+      ) : (
+        <Text type="code" size="2xs" color="secondary">{index + 1}</Text>
+      )}
+    </HStack>
   );
 }
 
@@ -100,210 +120,151 @@ export function Sidebar({
   const [pathInput, setPathInput] = useState("");
   const [editing, setEditing] = useState(false);
 
-  return (
-    <aside className="flex h-full flex-col bg-card/50">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <span className="text-base font-semibold text-primary">aix</span>
-        <span className="text-[11px] text-muted-foreground">speckit agent</span>
-      </div>
+  const submitPath = () => {
+    if (pathInput.trim()) {
+      onOpenProject(pathInput.trim());
+      setEditing(false);
+    }
+  };
 
-      <ScrollArea className="flex-1">
-        <SectionLabel>Project</SectionLabel>
-        <div className="px-2 pb-1">
-          {projectRoot ? (
-            <div className="flex items-start gap-2 rounded-md px-2 py-1.5">
-              <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium" title={projectRoot}>
-                  {projectRoot.split("/").filter(Boolean).pop()}
-                </p>
-                <p className="truncate font-mono text-[10px] text-muted-foreground/70" title={projectRoot}>
-                  {projectRoot}
-                </p>
-              </div>
-            </div>
-          ) : null}
+  return (
+    <SideNav
+      aria-label="Pipeline navigation"
+      resizable={{ defaultWidth: 280, minWidth: 220, maxWidth: 420, autoSaveId: "aix-sidebar-width" }}
+      header={
+        <HStack gap={2} vAlign="center" padding={3}>
+          <Text type="large" weight="semibold" color="accent">aix</Text>
+          <Text type="supporting" color="secondary">speckit agent</Text>
+        </HStack>
+      }
+      footer={
+        <VStack padding={2}>
           <Button
-            variant="outline"
+            label="Provider settings"
+            variant="ghost"
             size="sm"
-            className="w-full justify-start"
-            onClick={async () => {
+            width="100%"
+            icon={<Icon icon={Settings2} size="sm" />}
+            onClick={onOpenSetup}
+          />
+        </VStack>
+      }
+    >
+      <SideNavSection title="Project">
+        <VStack gap={2} paddingInline={2} paddingBlockEnd={2}>
+          {projectRoot && (
+            <Card variant="muted" padding={2}>
+              <HStack gap={2} vAlign="start">
+                <Icon icon={FolderOpen} size="sm" color="accent" />
+                <StackItem size="fill">
+                  <VStack gap={0}>
+                    <Text type="label" weight="medium" maxLines={1}>
+                      {projectRoot.split("/").filter(Boolean).pop()}
+                    </Text>
+                    <Text type="code" size="2xs" color="secondary" maxLines={1}>
+                      {projectRoot}
+                    </Text>
+                  </VStack>
+                </StackItem>
+              </HStack>
+            </Card>
+          )}
+          <Button
+            label={projectRoot ? "Change project…" : "Open project…"}
+            variant="secondary"
+            size="sm"
+            width="100%"
+            icon={<Icon icon={FolderOpen} size="sm" />}
+            clickAction={async () => {
               try {
-                const dir = await open({ directory: true, title: "Open project" });
-                if (typeof dir === "string") onOpenProject(dir);
+                const dir = await chooseProjectDirectory();
+                if (dir) onOpenProject(dir);
               } catch {
                 setEditing(true);
               }
             }}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-            {projectRoot ? "Change project…" : "Open project…"}
-          </Button>
+          />
           {!projectRoot && getRecents().length > 0 && (
-            <div className="mt-2">
+            <VStack gap={1}>
               {getRecents().map((p) => (
-                <button
+                <SideNavItem
                   key={p}
+                  label={p.split("/").filter(Boolean).pop() ?? p}
+                  icon={FolderOpen}
+                  size="sm"
                   onClick={() => onOpenProject(p)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-                  title={p}
-                >
-                  <FolderOpen className="h-3 w-3 shrink-0 opacity-50" />
-                  <span className="truncate font-mono">{p.split("/").filter(Boolean).pop()}</span>
-                  <span className="truncate font-mono text-[9px] text-muted-foreground/40 flex-1">{p}</span>
-                </button>
+                  endContent={<Text type="code" size="2xs" color="secondary" maxLines={1}>{p}</Text>}
+                />
               ))}
-            </div>
+            </VStack>
           )}
           {editing && (
             <form
-              className="mt-1.5"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (pathInput.trim()) {
-                  onOpenProject(pathInput.trim());
-                  setEditing(false);
-                }
+                submitPath();
               }}
             >
-              <Input
+              <TextInput
+                label="Project path"
+                isLabelHidden
                 value={pathInput}
-                onChange={(e) => setPathInput(e.target.value)}
+                onChange={setPathInput}
+                onEnter={submitPath}
                 placeholder="/path/to/project"
-                className="h-7 text-xs"
-                autoFocus
+                size="sm"
+                width="100%"
+                hasAutoFocus
               />
             </form>
           )}
-        </div>
+        </VStack>
+      </SideNavSection>
 
-        {pipeline && pipeline.features.length > 0 && (
-          <>
-            <SectionLabel>Features</SectionLabel>
-            <div className="px-2 pb-1">
-              {pipeline.features.map((f) => {
-                const [total, done] = f.artifacts.task_progress;
-                const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-                return (
-                  <button
-                    key={f.slug}
-                    onClick={() => onSelectFeature(f.slug)}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-                      f.slug === activeFeature
-                        ? "bg-secondary text-foreground"
-                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-                    )}
-                  >
-                    {pct === 100 && total > 0 ? (
-                      <CircleCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
-                    ) : (
-                      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                    )}
-                    <span className="flex-1 truncate font-mono">{f.slug}</span>
-                    {total > 0 && (
-                      <span className="font-mono text-[10px] text-muted-foreground/70">
-                        {done}/{total}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        <SectionLabel>Pipeline</SectionLabel>
-        {activeFeature ? (
-          <div className="mx-2 mb-1.5 flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-2 py-1.5">
-            <FileText className="h-3 w-3 shrink-0 text-primary/80" />
-            <span className="truncate font-mono text-[11px] text-primary/90">{activeFeature}</span>
-            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/60">steps apply to this feature</span>
-          </div>
-        ) : (
-          <div className="mx-2 mb-1.5 rounded-md border border-border/60 px-2 py-1.5 text-[11px] text-muted-foreground/60">
-            no feature yet — specify creates the first one
-          </div>
-        )}
-        <nav className="px-2 pb-2">
-          {STEPS.map((step, i) => {
-            const active = step.id === activeStep;
-            const st = stepStatus(step.id, pipeline, activeFeature);
-            const Icon = STEP_ICONS[step.id];
-            const row = (
-              <button
-                key={step.id}
-                onClick={() => onSelectStep(step.id)}
-                className={cn(
-                  "relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
-                  active
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-                )}
-              >
-                {active && (
-                  <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" aria-hidden />
-                )}
-                {i < STEPS.length - 1 && (
-                  <span
-                    className={cn(
-                      "absolute left-[17px] top-[26px] h-[14px] w-px",
-                      st === "done" ? "bg-primary/40" : "bg-border"
-                    )}
-                    aria-hidden
-                  />
-                )}
-                <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
-                  {st === "done" ? (
-                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary/20">
-                      <Check className="h-3 w-3 text-primary" strokeWidth={3} />
-                    </span>
-                  ) : st === "partial" ? (
-                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-primary/60">
-                      <CircleDot className="h-2.5 w-2.5 text-primary" />
-                    </span>
-                  ) : (
-                    <span
-                      className={cn(
-                        "flex h-[18px] w-[18px] items-center justify-center rounded-full border font-mono text-[9px]",
-                        active ? "border-primary/60 text-primary" : "border-border text-muted-foreground/70"
-                      )}
-                    >
-                      {i + 1}
-                    </span>
-                  )}
-                </span>
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", active ? "text-primary" : "text-muted-foreground/60")} />
-                <span className="flex-1">{step.label}</span>
-                {step.id === "implement" && (() => {
-                  const f = pipeline?.features.find((x) => x.slug === activeFeature);
-                  const [total, done] = f?.artifacts.task_progress ?? [0, 0];
-                  return total > 0 ? (
-                    <span className="font-mono text-[10px] text-muted-foreground/70">{done}/{total}</span>
-                  ) : null;
-                })()}
-                {step.gate && <Lock className="h-3 w-3 shrink-0 text-muted-foreground/50" />}
-              </button>
+      {pipeline && pipeline.features.length > 0 && (
+        <SideNavSection title="Features">
+          {pipeline.features.map((f) => {
+            const [total, done] = f.artifacts.task_progress;
+            const complete = total > 0 && done === total;
+            return (
+              <SideNavItem
+                key={f.slug}
+                label={f.slug}
+                icon={complete ? CircleCheck : FileText}
+                isSelected={f.slug === activeFeature}
+                onClick={() => onSelectFeature(f.slug)}
+                endContent={total > 0 ? <Text type="code" size="2xs" color="secondary">{done}/{total}</Text> : undefined}
+              />
             );
-            if (step.gate) {
-              return (
-                <Tooltip key={step.id}>
-                  <TooltipTrigger asChild>{row}</TooltipTrigger>
-                  <TooltipContent side="right">{step.gateHint}</TooltipContent>
-                </Tooltip>
-              );
-            }
-            return row;
           })}
-        </nav>
-      </ScrollArea>
+        </SideNavSection>
+      )}
 
-      <div className="shrink-0 border-t border-border p-2">
-        <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onOpenSetup}>
-          <Settings2 className="h-3.5 w-3.5" />
-          Provider settings
-        </Button>
-      </div>
-    </aside>
+      <SideNavSection title="Pipeline" subtitle={activeFeature ?? "no feature yet — specify creates the first one"}>
+        {STEPS.map((step, i) => {
+          const status = stepStatus(step.id, pipeline, activeFeature);
+          const feature = pipeline?.features.find((x) => x.slug === activeFeature);
+          const [total, done] = feature?.artifacts.task_progress ?? [0, 0];
+          return (
+            <SideNavItem
+              key={step.id}
+              label={step.label}
+              icon={STEP_ICONS[step.id]}
+              isSelected={step.id === activeStep}
+              onClick={() => onSelectStep(step.id)}
+              aria-label={step.gateHint ?? step.label}
+              endContent={
+                <StepEndContent
+                  status={status}
+                  index={i}
+                  gated={!!step.gate}
+                  progress={step.id === "implement" && total > 0 ? `${done}/${total}` : undefined}
+                />
+              }
+            />
+          );
+        })}
+      </SideNavSection>
+    </SideNav>
   );
 }

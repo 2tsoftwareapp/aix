@@ -1,19 +1,5 @@
-/* Artifact markdown rendering — token-driven typography (shadcn vars) */
-.artifact-markdown { font-size: 13px; line-height: 1.65; color: hsl(var(--muted-foreground)); }
-.artifact-markdown h1 { font-size: 17px; font-weight: 650; color: hsl(var(--foreground)); margin: 18px 0 8px; }
-.artifact-markdown h2 { font-size: 15px; font-weight: 620; color: hsl(var(--foreground)); margin: 16px 0 6px; }
-.artifact-markdown h3 { font-size: 13.5px; font-weight: 600; color: hsl(var(--foreground)); margin: 12px 0 4px; }
-.artifact-markdown p { margin: 6px 0; }
-.artifact-markdown ul, .artifact-markdown ol { margin: 6px 0 6px 20px; }
-.artifact-markdown ul { list-style: disc; }
-.artifact-markdown ol { list-style: decimal; }
-.artifact-markdown li { margin: 3px 0; }
-.artifact-markdown a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
-.artifact-markdown code { background: hsl(var(--secondary)); padding: 1px 5px; border-radius: 4px; font-size: 12px; color: hsl(var(--primary)); }
-.artifact-markdown pre { background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
-.artifact-markdown pre code { background: none; padding: 0; color: hsl(var(--muted-foreground)); }
-.artifact-markdown table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 12px; }
-.artifact-markdown th, .artifact-markdown td { border: 1px solid hsl(var(--border)); padding: 4px 8px; text-align: left; }
-.artifact-markdown th { color: hsl(var(--foreground)); background: hsl(var(--secondary)); }
-.artifact-markdown blockquote { border-left: 3px solid hsl(var(--border)); padding-left: 12px; margin: 8px 0; color: hsl(var(--muted-foreground) / 0.8); }
-.artifact-markdown input[type="checkbox"] { margin-right: 6px; accent-color: hsl(var(--primary)); }
+/* App-specific composition adjustments. Astryx Markdown owns artifact typography. */
+.aix-artifact-editor textarea {
+  min-height: 60vh;
+  font-family: var(--font-family-code);
+}

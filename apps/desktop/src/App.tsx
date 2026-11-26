@@ -1,58 +1,54 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { Toaster, toast } from "sonner";
+import { AppShell } from "@astryxdesign/core/AppShell";
+import { HStack, StackItem } from "@astryxdesign/core/Layout";
+import { Card } from "@astryxdesign/core/Card";
+import { ResizeHandle, useResizable } from "@astryxdesign/core/Resizable";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ProviderSetup } from "./components/ProviderSetup";
+import { useAppToast } from "./lib/toast";
 import type { PipelineState, StepId } from "./types";
 import { addRecent, getLastProject } from "./lib/recents";
+import { chooseProjectDirectory } from "./lib/projectDialog";
 
 export function App() {
+  const toast = useAppToast();
   const [activeStep, setActiveStep] = useState<StepId>((localStorage.getItem("aix-step") as never) ?? "specify");
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
-  const [hasKey, setHasKey] = useState(false);
-  const [keyVersion, setKeyVersion] = useState(0);
   const [showSetup, setShowSetup] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  const artifactResize = useResizable({
+    defaultSize: 430,
+    minSize: 320,
+    maxSize: 720,
+    autoSaveId: "aix-artifact-panel",
+  });
 
   const refreshPipeline = useCallback(
     async (root: string, selectNewest = false) => {
       try {
         const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
         setPipeline(state);
-        if (state.features.length > 0) {
-          const stillExists = activeFeature && state.features.some((f) => f.slug === activeFeature);
-          if (!stillExists || selectNewest) {
-            // restore the remembered feature when it still exists in the scan
-            const remembered = localStorage.getItem("aix-feature");
-            const valid = remembered && state.features.some((f) => f.slug === remembered);
-            setActiveFeature(valid ? remembered : state.features[state.features.length - 1].slug);
-          }
-        }
+        setActiveFeature((current) => {
+          if (!selectNewest && current && state.features.some((f) => f.slug === current)) return current;
+          const remembered = localStorage.getItem("aix-feature");
+          const valid = remembered && state.features.some((f) => f.slug === remembered);
+          return valid ? remembered : state.features[state.features.length - 1]?.slug ?? null;
+        });
       } catch (e) {
-        toast.error("Project scan failed", { description: String(e) });
+        toast.error("Project scan failed", String(e));
       }
     },
-    [activeFeature]
+    [toast]
   );
 
   useEffect(() => { localStorage.setItem("aix-step", activeStep); }, [activeStep]);
   useEffect(() => { if (activeFeature) localStorage.setItem("aix-feature", activeFeature); }, [activeFeature]);
   useEffect(() => {
-    // any configured provider counts — not just anthropic
-    Promise.all(
-      ["anthropic", "openai", "openrouter", "qwen"].map((p) =>
-        invoke<boolean>("has_provider_key", { providerId: p }).catch(() => false)
-      )
-    ).then((results) => {
-      const any = results.some(Boolean);
-      setHasKey(any);
-      if (!any) setShowSetup(true);
-    });
     const last = getLastProject();
     if (last) setProjectRoot(last);
   }, []);
@@ -63,78 +59,80 @@ export function App() {
     setProjectRoot(path);
   }, []);
 
+  const openProjectPicker = useCallback(async () => {
+    try {
+      const path = await chooseProjectDirectory();
+      if (path) openProject(path);
+    } catch (error) {
+      toast.error("Couldn't open project picker", String(error));
+    }
+  }, [openProject, toast]);
+
   useEffect(() => {
     if (projectRoot) refreshPipeline(projectRoot);
   }, [projectRoot, refreshPipeline]);
 
+  const activeChecklists = useMemo(
+    () => pipeline?.features.find((f) => f.slug === activeFeature)?.artifacts.checklists.map((c) => c.name) ?? [],
+    [pipeline, activeFeature]
+  );
+
   return (
-    <Tooltip0>
-      <div className="flex h-full bg-background text-foreground">
-        <PanelGroup direction="horizontal" autoSaveId="aix-layout">
-          <Panel defaultSize={18} minSize={14} maxSize={28}>
-            <Sidebar
-              activeStep={activeStep}
-              onSelectStep={setActiveStep}
-              projectRoot={projectRoot}
-              onOpenProject={openProject}
-              pipeline={pipeline}
-              activeFeature={activeFeature}
-              onSelectFeature={setActiveFeature}
-              onOpenSetup={() => setShowSetup(true)}
-            />
-          </Panel>
-          <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40 data-[resize-handle-state=drag]:bg-primary" />
-          <Panel defaultSize={52} minSize={32}>
+    <>
+      <AppShell
+        height="fill"
+        variant="surface"
+        contentPadding={0}
+        sideNav={
+          <Sidebar
+            activeStep={activeStep}
+            onSelectStep={setActiveStep}
+            projectRoot={projectRoot}
+            onOpenProject={openProject}
+            pipeline={pipeline}
+            activeFeature={activeFeature}
+            onSelectFeature={setActiveFeature}
+            onOpenSetup={() => setShowSetup(true)}
+          />
+        }
+      >
+        <HStack height="100%" width="100%" gap={0}>
+          <StackItem size="fill">
             <ChatPanel
               step={activeStep}
               projectRoot={projectRoot}
               featureSlug={activeFeature}
-              hasKey={keyVersion}
               onStepDone={() => {
                 if (projectRoot) {
-                  // specify always creates a new feature dir — jump to it
                   refreshPipeline(projectRoot, activeStep === "specify");
                 }
                 setRefreshToken((t) => t + 1);
               }}
+              onOpenProject={openProjectPicker}
+              onOpenSetup={() => setShowSetup(true)}
             />
-          </Panel>
-          <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40 data-[resize-handle-state=drag]:bg-primary" />
-          <Panel defaultSize={30} minSize={20} maxSize={45}>
-            <ArtifactPanel
-              step={activeStep}
-              projectRoot={projectRoot}
-              featureSlug={activeFeature}
-              refreshToken={refreshToken}
-              checklists={
-                pipeline?.features.find((f) => f.slug === activeFeature)?.artifacts.checklists.map((c) => c.name) ?? []
-              }
-            />
-          </Panel>
-        </PanelGroup>
-        {showSetup && (
-          <ProviderSetup
-            onDone={(stored) => {
-              setShowSetup(false);
-              if (stored) {
-                setHasKey(true);
-                // boolean hasKey can't re-fire effects when already true —
-                // a version counter guarantees the key-status refresh runs
-                setKeyVersion((v) => v + 1);
-              }
-            }}
+          </StackItem>
+          <ResizeHandle
+            direction="horizontal"
+            resizable={artifactResize.props}
+            isReversed
+            hasDivider
+            label="Resize artifact panel"
           />
-        )}
-        <Toaster theme="dark" position="bottom-right" toastOptions={{
-          style: { background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" },
-        }} />
-      </div>
-    </Tooltip0>
+          <StackItem size="static" style={{ width: artifactResize.size }}>
+            <Card variant="transparent" padding={0} width="100%" height="100%">
+              <ArtifactPanel
+                step={activeStep}
+                projectRoot={projectRoot}
+                featureSlug={activeFeature}
+                refreshToken={refreshToken}
+                checklists={activeChecklists}
+              />
+            </Card>
+          </StackItem>
+        </HStack>
+      </AppShell>
+      <ProviderSetup isOpen={showSetup} onClose={() => setShowSetup(false)} />
+    </>
   );
-}
-
-// lightweight wrapper so tooltips work app-wide without circular imports
-import { TooltipProvider } from "./components/ui/tooltip";
-function Tooltip0({ children }: { children: React.ReactNode }) {
-  return <TooltipProvider delayDuration={300}>{children}</TooltipProvider>;
 }
