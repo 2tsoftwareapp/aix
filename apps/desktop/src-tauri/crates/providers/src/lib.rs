@@ -1,6 +1,13 @@
 //! providers: multi-provider LLM abstraction.
 //! v1: Anthropic, OpenAI, OpenRouter — API key auth; OAuth subscription modules later.
 
+pub mod anthropic;
+pub mod credentials;
+pub mod http;
+pub mod live;
+pub mod openai_compat;
+pub mod sse;
+
 use async_trait::async_trait;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
