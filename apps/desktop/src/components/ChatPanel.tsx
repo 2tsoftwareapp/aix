@@ -18,6 +18,7 @@ const STEP_HINTS: Record<StepId, string> = {
 type StreamPayload =
   | { kind: "delta"; text: string }
   | { kind: "tool_use"; name: string }
+  | { kind: "tool_result"; name: string; ok: boolean; detail: string }
   | { kind: "artifact_written"; path: string }
   | { kind: "gate_blocked"; reason: string }
   | { kind: "done" }
@@ -26,6 +27,12 @@ type StreamPayload =
 interface Msg {
   role: "user" | "assistant" | "system";
   text: string;
+}
+
+interface ApprovalReq {
+  approval_id: string;
+  tool: string;
+  detail: string;
 }
 
 export function ChatPanel({
@@ -60,6 +67,11 @@ export function ChatPanel({
           }
           return next;
         });
+      } else if (p.kind === "tool_result") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", text: `${p.ok ? "⚙" : "✗"} ${p.name}: ${p.detail}` },
+        ]);
       } else if (p.kind === "artifact_written") {
         setMessages((prev) => [
           ...prev,
@@ -85,6 +97,33 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const [approvals, setApprovals] = useState<ApprovalReq[]>([]);
+  useEffect(() => {
+    const unlisten = listen<{ kind: string; approval_id: string; tool: string; detail: string }>(
+      "approval-request",
+      (ev) => {
+        if (ev.payload.kind === "request") {
+          setApprovals((prev) => [
+            ...prev,
+            { approval_id: ev.payload.approval_id, tool: ev.payload.tool, detail: ev.payload.detail },
+          ]);
+        }
+      }
+    );
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  const answerApproval = async (id: string, approved: boolean) => {
+    setApprovals((prev) => prev.filter((a) => a.approval_id !== id));
+    try {
+      await invoke("respond_approval", { approvalId: id, approved });
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: "system", text: `⚠ approval response failed: ${e}` }]);
+    }
+  };
+
   const run = async () => {
     if (!projectRoot || !input.trim()) return;
     setRunning(true);
@@ -100,6 +139,7 @@ export function ChatPanel({
           user_input: userInput,
           provider_id: "anthropic",
           model: "claude-sonnet-4-5",
+          approval_mode: "ask",
         },
       });
     } catch (e) {
@@ -157,6 +197,28 @@ export function ChatPanel({
             </div>
           ))}
           {running && <div className="text-xs text-ink-faint animate-pulse">streaming…</div>}
+          {approvals.map((a) => (
+            <div key={a.approval_id} className="rounded-xl border border-accent/50 bg-surface-overlay px-4 py-3">
+              <p className="text-sm mb-1">
+                Approve <code className="font-mono text-xs text-accent">{a.tool}</code>?
+              </p>
+              <p className="text-xs text-ink-dim font-mono mb-3 break-all">{a.detail}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => answerApproval(a.approval_id, true)}
+                  className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent-hover"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => answerApproval(a.approval_id, false)}
+                  className="rounded-lg border border-edge px-3 py-1 text-xs text-ink-dim hover:text-ink"
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          ))}
           <div ref={bottomRef} />
         </div>
       </div>

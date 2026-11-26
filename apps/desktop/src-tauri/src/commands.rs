@@ -5,7 +5,10 @@
 
 use futures_util::StreamExt;
 use providers::live::{AnthropicProvider, OpenAiCompatProvider};
-use providers::{CompletionRequest, Credential, Message, Provider, Role};
+use providers::{CompletionRequest, Credential, Message, Provider, Role, ToolResult};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use tokio::sync::oneshot;
 use serde::{Deserialize, Serialize};
 use speckit_core::gates::{evaluate, GateVerdict};
 use speckit_core::runner::{ArtifactContext, StepRunner};
@@ -68,10 +71,45 @@ pub fn has_provider_key(provider_id: String) -> bool {
 pub enum StepStreamPayload {
     Delta { text: String },
     ToolUse { name: String },
+    ToolResult { name: String, ok: bool, detail: String },
     ArtifactWritten { path: String },
     GateBlocked { reason: String },
     Done,
     Error { message: String },
+}
+
+/// Pending approval requests: id → resolver channel. The agent loop parks on
+/// the oneshot until the UI calls respond_approval.
+#[derive(Default)]
+pub struct ApprovalRegistry {
+    pub pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+}
+
+#[tauri::command]
+pub fn respond_approval(
+    registry: tauri::State<'_, ApprovalRegistry>,
+    approval_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let tx = registry
+        .pending
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&approval_id);
+    match tx {
+        Some(tx) => tx.send(approved).map_err(|_| "loop already gone".to_string()),
+        None => Err(format!("no pending approval: {approval_id}")),
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ApprovalRequestPayload {
+    Request {
+        approval_id: String,
+        tool: String,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +120,8 @@ pub struct RunStepInput {
     pub user_input: String,
     pub provider_id: String,
     pub model: String,
+    /// "ask" | "auto-edit" | "full-auto"; defaults to ask.
+    pub approval_mode: Option<String>,
 }
 
 fn template_root() -> PathBuf {
@@ -174,7 +214,11 @@ fn next_feature_dir(project_root: &Path, user_input: &str) -> PathBuf {
 const STREAM_EVENT: &str = "step-stream";
 
 #[tauri::command]
-pub async fn run_step(app: AppHandle, input: RunStepInput) -> Result<(), String> {
+pub async fn run_step(
+    app: AppHandle,
+    registry: tauri::State<'_, ApprovalRegistry>,
+    input: RunStepInput,
+) -> Result<(), String> {
     let emit = |p: StepStreamPayload| {
         let _ = app.emit(STREAM_EVENT, p);
     };
@@ -239,49 +283,167 @@ pub async fn run_step(app: AppHandle, input: RunStepInput) -> Result<(), String>
     }
 
     let provider = make_provider(&input.provider_id)?;
-    let req = CompletionRequest {
-        model: input.model.clone(),
-        system: Some(system),
-        messages: vec![Message {
-            role: Role::User,
-            content: user_msg,
-        }],
-        tools: vec![],
-        max_tokens: 8192,
+    let mode = match input.approval_mode.as_deref() {
+        Some("full-auto") => executor::ApprovalMode::FullAuto,
+        Some("auto-edit") => executor::ApprovalMode::AutoEdit,
+        _ => executor::ApprovalMode::Ask,
     };
+    let denylist = executor::default_denylist();
+    // Implement is the execution step — it gets file/shell tools and the agent loop.
+    // Artifact steps stay single-shot: their output IS the artifact.
+    let use_tools = step == Step::Implement;
+    let tools = if use_tools { executor::tool_defs() } else { vec![] };
 
-    let mut stream = provider.complete(req).await.map_err(|e| e.to_string())?;
-    let mut collected = String::new();
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(providers::StreamEvent::TextDelta { text }) => {
-                collected.push_str(&text);
-                emit(StepStreamPayload::Delta { text });
-            }
-            Ok(providers::StreamEvent::ToolUse { call }) => {
-                emit(StepStreamPayload::ToolUse { name: call.name });
-            }
-            Ok(providers::StreamEvent::Done) => break,
-            Ok(providers::StreamEvent::Error { message }) => {
-                emit(StepStreamPayload::Error { message });
-                return Ok(());
-            }
-            Ok(providers::StreamEvent::Usage { .. }) => {}
+    let mut messages = vec![Message {
+        role: Role::User,
+        content: user_msg,
+        tool_calls: vec![],
+        tool_results: vec![],
+    }];
+    let mut final_text = String::new();
+    let mut iterations = 0u32;
+
+    loop {
+        iterations += 1;
+        if iterations > 40 {
+            emit(StepStreamPayload::Error {
+                message: "agent loop exceeded 40 iterations — stopping".into(),
+            });
+            return Ok(());
+        }
+        let req = CompletionRequest {
+            model: input.model.clone(),
+            system: Some(system.clone()),
+            messages: messages.clone(),
+            tools: tools.clone(),
+            max_tokens: 8192,
+        };
+        let mut stream = match provider.complete(req).await {
+            Ok(s) => s,
             Err(e) => {
                 emit(StepStreamPayload::Error {
                     message: e.to_string(),
                 });
                 return Ok(());
             }
+        };
+        let mut turn_text = String::new();
+        let mut turn_calls: Vec<providers::ToolCall> = Vec::new();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(providers::StreamEvent::TextDelta { text }) => {
+                    turn_text.push_str(&text);
+                    emit(StepStreamPayload::Delta { text });
+                }
+                Ok(providers::StreamEvent::ToolUse { call }) => {
+                    emit(StepStreamPayload::ToolUse {
+                        name: call.name.clone(),
+                    });
+                    turn_calls.push(call);
+                }
+                Ok(providers::StreamEvent::Done) => break,
+                Ok(providers::StreamEvent::Error { message }) => {
+                    emit(StepStreamPayload::Error { message });
+                    return Ok(());
+                }
+                Ok(providers::StreamEvent::Usage { .. }) => {}
+                Err(e) => {
+                    emit(StepStreamPayload::Error {
+                        message: e.to_string(),
+                    });
+                    return Ok(());
+                }
+            }
         }
+
+        if turn_calls.is_empty() {
+            final_text = turn_text;
+            break;
+        }
+
+        // Record the assistant turn (text + tool calls), then execute each call.
+        messages.push(Message {
+            role: Role::Assistant,
+            content: turn_text,
+            tool_calls: turn_calls.clone(),
+            tool_results: vec![],
+        });
+
+        let mut results = Vec::new();
+        for call in &turn_calls {
+            let detail = summarize_tool_call(call);
+            let approved = if executor::tool_requires_approval(&call.name, mode) {
+                let approval_id = uuid_simple();
+                let (tx, rx) = oneshot::channel::<bool>();
+                registry
+                    .pending
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .insert(approval_id.clone(), tx);
+                let _ = app.emit("approval-request", ApprovalRequestPayload::Request {
+                    approval_id: approval_id.clone(),
+                    tool: call.name.clone(),
+                    detail: detail.clone(),
+                });
+                // 10-minute outer bound so a closed UI can't hang the loop forever.
+                match tokio::time::timeout(std::time::Duration::from_secs(600), rx).await {
+                    Ok(Ok(v)) => v,
+                    _ => false,
+                }
+            } else {
+                true
+            };
+
+            let result = if approved {
+                match executor::execute_tool(&project_root, &call.name, &call.input, &denylist).await {
+                    Ok(out) => {
+                        emit(StepStreamPayload::ToolResult {
+                            name: call.name.clone(),
+                            ok: true,
+                            detail: detail.clone(),
+                        });
+                        ToolResult {
+                            tool_call_id: call.id.clone(),
+                            content: out,
+                            is_error: false,
+                        }
+                    }
+                    Err(e) => {
+                        emit(StepStreamPayload::ToolResult {
+                            name: call.name.clone(),
+                            ok: false,
+                            detail: e.to_string(),
+                        });
+                        ToolResult {
+                            tool_call_id: call.id.clone(),
+                            content: format!("error: {e}"),
+                            is_error: true,
+                        }
+                    }
+                }
+            } else {
+                ToolResult {
+                    tool_call_id: call.id.clone(),
+                    content: "denied by user".into(),
+                    is_error: true,
+                }
+            };
+            results.push(result);
+        }
+        messages.push(Message {
+            role: Role::User,
+            content: String::new(),
+            tool_calls: vec![],
+            tool_results: results,
+        });
     }
 
     // Write primary artifact through the sanitization boundary.
     if let Some(rel) = StepRunner::primary_artifact(step) {
-        if !collected.trim().is_empty() {
+        if !final_text.trim().is_empty() {
             let writes = vec![speckit_core::runner::ArtifactWrite {
                 rel_path: rel.to_string(),
-                content: strip_code_fence(&collected),
+                content: strip_code_fence(&final_text),
             }];
             match StepRunner::sanitize_writes(step, writes) {
                 Ok(accepted) => {
@@ -332,3 +494,24 @@ fn strip_code_fence(text: &str) -> String {
 // Credential is re-exported for future OAuth wiring; silence unused warning for now.
 #[allow(unused)]
 fn _cred_marker(_: Credential) {}
+
+fn summarize_tool_call(call: &providers::ToolCall) -> String {
+    match call.name.as_str() {
+        "write_file" => format!(
+            "write {} ({} bytes)",
+            call.input.get("path").and_then(serde_json::Value::as_str).unwrap_or("?"),
+            call.input.get("content").and_then(serde_json::Value::as_str).map(|c| c.len()).unwrap_or(0),
+        ),
+        "run_shell" => format!(
+            "run `{}`",
+            call.input.get("command").and_then(serde_json::Value::as_str).unwrap_or("?")
+        ),
+        other => format!("{} {}", other, call.input),
+    }
+}
+
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("appr-{:x}-{:x}", nanos, std::process::id())
+}

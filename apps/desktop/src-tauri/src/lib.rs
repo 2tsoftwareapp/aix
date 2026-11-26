@@ -1,6 +1,9 @@
 mod commands;
 
-use commands::{check_gate, has_provider_key, run_step, scan_pipeline, store_provider_key};
+use commands::{
+    check_gate, has_provider_key, respond_approval, run_step, scan_pipeline, store_provider_key,
+    ApprovalRegistry,
+};
 use speckit_core::TemplateStore;
 
 #[tauri::command]
@@ -18,10 +21,12 @@ fn template_count() -> Result<usize, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(ApprovalRegistry::default())
         .invoke_handler(tauri::generate_handler![
             scan_pipeline,
             check_gate,
             run_step,
+            respond_approval,
             store_provider_key,
             has_provider_key,
             template_count,

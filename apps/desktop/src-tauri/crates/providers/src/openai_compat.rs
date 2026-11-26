@@ -98,17 +98,43 @@ pub fn build_request_body(req: &crate::CompletionRequest) -> Value {
         messages.push(serde_json::json!({"role": "system", "content": sys}));
     }
     for m in &req.messages {
-        if m.role == crate::Role::System {
-            messages.push(serde_json::json!({"role": "system", "content": m.content}));
-        } else {
-            messages.push(serde_json::json!({
-                "role": match m.role {
-                    crate::Role::User => "user",
-                    crate::Role::Assistant => "assistant",
-                    crate::Role::System => unreachable!(),
-                },
-                "content": m.content,
-            }));
+        match m.role {
+            crate::Role::System => {
+                messages.push(serde_json::json!({"role": "system", "content": m.content}));
+            }
+            crate::Role::Assistant => {
+                let mut msg = serde_json::json!({
+                    "role": "assistant",
+                    "content": if m.content.is_empty() { Value::Null } else { serde_json::json!(m.content) },
+                });
+                if !m.tool_calls.is_empty() {
+                    msg["tool_calls"] = serde_json::json!(m.tool_calls.iter().map(|c| {
+                        serde_json::json!({
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.name,
+                                "arguments": serde_json::to_string(&c.input).unwrap_or_default(),
+                            }
+                        })
+                    }).collect::<Vec<_>>());
+                }
+                messages.push(msg);
+            }
+            crate::Role::User => {
+                // OpenAI wants each tool result as its own role:tool message,
+                // emitted before any plain user text.
+                for res in &m.tool_results {
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": res.tool_call_id,
+                        "content": res.content,
+                    }));
+                }
+                if !m.content.is_empty() || m.tool_results.is_empty() {
+                    messages.push(serde_json::json!({"role": "user", "content": m.content}));
+                }
+            }
         }
     }
     let mut body = serde_json::json!({
@@ -200,7 +226,7 @@ mod tests {
         let req = crate::CompletionRequest {
             model: "gpt-5".into(),
             system: Some("sys".into()),
-            messages: vec![crate::Message { role: crate::Role::User, content: "hi".into() }],
+            messages: vec![crate::Message { role: crate::Role::User, content: "hi".into() , tool_calls: vec![], tool_results: vec![] }],
             tools: vec![],
             max_tokens: 100,
         };
@@ -208,5 +234,52 @@ mod tests {
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use crate::{Message, Role, ToolCall, ToolResult};
+
+    #[test]
+    fn tool_results_become_role_tool_messages() {
+        let req = crate::CompletionRequest {
+            model: "m".into(),
+            system: None,
+            max_tokens: 100,
+            tools: vec![],
+            messages: vec![
+                Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({"path": "a.rs"}),
+                    }],
+                    tool_results: vec![],
+                },
+                Message {
+                    role: Role::User,
+                    content: String::new(),
+                    tool_calls: vec![],
+                    tool_results: vec![ToolResult {
+                        tool_call_id: "call_1".into(),
+                        content: "contents".into(),
+                        is_error: false,
+                    }],
+                },
+            ],
+        };
+        let body = super::build_request_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "assistant");
+        assert_eq!(msgs[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(msgs[0]["tool_calls"][0]["function"]["name"], "read_file");
+        // arguments must be a string, not an object
+        assert!(msgs[0]["tool_calls"][0]["function"]["arguments"].is_string());
+        assert_eq!(msgs[1]["role"], "tool");
+        assert_eq!(msgs[1]["tool_call_id"], "call_1");
+        assert_eq!(msgs[1]["content"], "contents");
     }
 }

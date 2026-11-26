@@ -119,14 +119,36 @@ pub fn build_request_body(req: &crate::CompletionRequest) -> Value {
         "max_tokens": req.max_tokens,
         "stream": true,
         "messages": req.messages.iter().filter(|m| m.role != crate::Role::System).map(|m| {
-            serde_json::json!({
-                "role": match m.role {
-                    crate::Role::User => "user",
-                    crate::Role::Assistant => "assistant",
-                    crate::Role::System => unreachable!(),
-                },
-                "content": m.content,
-            })
+            let role = match m.role {
+                crate::Role::User => "user",
+                crate::Role::Assistant => "assistant",
+                crate::Role::System => unreachable!(),
+            };
+            // Plain text message fast path.
+            if m.tool_calls.is_empty() && m.tool_results.is_empty() {
+                return serde_json::json!({ "role": role, "content": m.content });
+            }
+            let mut blocks = Vec::new();
+            if !m.content.is_empty() {
+                blocks.push(serde_json::json!({"type": "text", "text": m.content}));
+            }
+            for call in &m.tool_calls {
+                blocks.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": call.input,
+                }));
+            }
+            for res in &m.tool_results {
+                blocks.push(serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": res.tool_call_id,
+                    "content": res.content,
+                    "is_error": res.is_error,
+                }));
+            }
+            serde_json::json!({ "role": role, "content": blocks })
         }).collect::<Vec<_>>(),
     });
     if let Some(sys) = &req.system {
@@ -203,8 +225,8 @@ mod tests {
             model: "claude-sonnet-4-5".into(),
             system: Some("be helpful".into()),
             messages: vec![
-                crate::Message { role: crate::Role::System, content: "ignored-here".into() },
-                crate::Message { role: crate::Role::User, content: "hi".into() },
+                crate::Message { role: crate::Role::System, content: "ignored-here".into() , tool_calls: vec![], tool_results: vec![] },
+                crate::Message { role: crate::Role::User, content: "hi".into() , tool_calls: vec![], tool_results: vec![] },
             ],
             tools: vec![],
             max_tokens: 1024,
@@ -221,5 +243,50 @@ mod tests {
         let mut m = AnthropicMapper::default();
         let out = m.feed(&ev("error", r#"{"error":{"type":"overloaded_error","message":"Overloaded"}}"#));
         assert!(matches!(&out[0], StreamEvent::Error { message } if message == "Overloaded"));
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use crate::{Message, Role, ToolCall, ToolResult};
+
+    #[test]
+    fn tool_calls_and_results_map_to_blocks() {
+        let req = crate::CompletionRequest {
+            model: "m".into(),
+            system: None,
+            max_tokens: 100,
+            tools: vec![],
+            messages: vec![
+                Message {
+                    role: Role::Assistant,
+                    content: "checking".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({"path": "a.rs"}),
+                    }],
+                    tool_results: vec![],
+                },
+                Message {
+                    role: Role::User,
+                    content: String::new(),
+                    tool_calls: vec![],
+                    tool_results: vec![ToolResult {
+                        tool_call_id: "toolu_1".into(),
+                        content: "contents".into(),
+                        is_error: false,
+                    }],
+                },
+            ],
+        };
+        let body = super::build_request_body(&req);
+        let asst = &body["messages"][0]["content"];
+        assert_eq!(asst[0]["type"], "text");
+        assert_eq!(asst[1]["type"], "tool_use");
+        assert_eq!(asst[1]["id"], "toolu_1");
+        let user = &body["messages"][1]["content"];
+        assert_eq!(user[0]["type"], "tool_result");
+        assert_eq!(user[0]["tool_use_id"], "toolu_1");
     }
 }

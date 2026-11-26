@@ -32,6 +32,20 @@ pub enum ProviderError {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Tool calls the assistant made in this turn (assistant messages only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// Tool results being returned to the model (user/tool messages only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_results: Vec<ToolResult>,
+}
+
+/// Result of executing one tool call, fed back to the model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub content: String,
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
