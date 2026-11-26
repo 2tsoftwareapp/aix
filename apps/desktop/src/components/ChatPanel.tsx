@@ -146,30 +146,45 @@ export function ChatPanel({
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
   const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
 
-  // Live model catalogs: every provider's API exposes a model list, so the
-  // combobox reflects what the account can actually use instead of aging
-  // hardcoded entries. Cached per provider for 24h; static lists are the
-  // offline/no-key fallback.
+  // Model catalogs derive from OpenRouter's public index — one unauthenticated
+  // fetch feeds every provider's dropdown. Per-provider ids are mapped by
+  // stripping the vendor prefix (anthropic versions also use dots there:
+  // claude-sonnet-4.5 -> claude-sonnet-4-5). Cached 24h; static lists are the
+  // offline fallback. The combobox still accepts any typed id.
   useEffect(() => {
-    if (!keyStatus[providerId] && providerId !== "openrouter") return;
-    if (liveModels[providerId]) return;
-    const CACHE_KEY = `aix-models-${providerId}`;
+    const CACHE_KEY = "aix-openrouter-catalog";
+    const derive = (catalog: string[]): Record<string, string[]> => {
+      const strip = (vendor: string) =>
+        catalog
+          .filter((id) => id.startsWith(vendor + "/") && !id.includes(":"))
+          .map((id) => id.slice(vendor.length + 1));
+      return {
+        anthropic: strip("anthropic").map((id) => id.replace(/\./g, "-")),
+        openai: strip("openai").filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id)),
+        qwen: strip("qwen").filter((id) => id.startsWith("qwen")),
+        openrouter: catalog.filter((id) => !id.includes(":")),
+      };
+    };
+    const apply = (catalog: string[]) => {
+      const derived = derive(catalog);
+      setLiveModels((m) => ({ ...m, ...derived }));
+    };
     try {
       const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
       if (cached && Date.now() - cached.at < 24 * 3600 * 1000 && cached.ids.length > 0) {
-        setLiveModels((m) => ({ ...m, [providerId]: cached.ids }));
+        apply(cached.ids);
         return;
       }
     } catch { /* fall through to fetch */ }
-    invoke<{ id: string }[]>("list_models", { providerId })
+    invoke<{ id: string }[]>("list_models", { providerId: "openrouter" })
       .then((models) => {
         if (models.length === 0) return;
         const ids = models.map((m) => m.id);
-        setLiveModels((m) => ({ ...m, [providerId]: ids }));
         localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
+        apply(ids);
       })
-      .catch(() => { /* static fallback list remains */ });
-  }, [providerId, keyStatus]);
+      .catch(() => { /* static fallback lists remain */ });
+  }, []);
 
   useEffect(() => {
     if (!projectRoot) return;
