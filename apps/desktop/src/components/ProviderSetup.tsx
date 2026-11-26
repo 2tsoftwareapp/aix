@@ -27,7 +27,7 @@ export function ProviderSetup({ onDone }: { onDone: (stored: boolean) => void })
         </div>
         <DialogDescription className="flex items-start gap-1.5 pb-3">
           <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-          Keys are stored in your OS keychain — never in files or logs. Environment variables also work as fallback.
+          Keys are stored in ~/.config/aix/credentials.json with owner-only permissions. Environment variables also work as fallback.
         </DialogDescription>
 
         <div className="space-y-2">
