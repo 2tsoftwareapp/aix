@@ -75,7 +75,10 @@ impl<'a> StepRunner<'a> {
             Step::Specify => Some("spec.md"),
             Step::Plan => Some("plan.md"),
             Step::Tasks => Some("tasks.md"),
-            // clarify/analyze/converge edit or report rather than produce one artifact
+            // clarify rewrites spec.md with clarifications encoded (single-shot mode:
+            // the model outputs the full updated artifact)
+            Step::Clarify => Some("spec.md"),
+            // analyze/converge report rather than produce one artifact
             _ => None,
         }
     }

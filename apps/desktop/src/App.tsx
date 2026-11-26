@@ -19,12 +19,15 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(0);
 
   const refreshPipeline = useCallback(
-    async (root: string) => {
+    async (root: string, selectNewest = false) => {
       try {
         const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
         setPipeline(state);
-        if (state.features.length > 0 && !activeFeature) {
-          setActiveFeature(state.features[state.features.length - 1].slug);
+        if (state.features.length > 0) {
+          const stillExists = activeFeature && state.features.some((f) => f.slug === activeFeature);
+          if (!stillExists || selectNewest) {
+            setActiveFeature(state.features[state.features.length - 1].slug);
+          }
         }
       } catch (e) {
         toast.error("Project scan failed", { description: String(e) });
@@ -78,7 +81,10 @@ export function App() {
               featureSlug={activeFeature}
               hasKey={hasKey}
               onStepDone={() => {
-                if (projectRoot) refreshPipeline(projectRoot);
+                if (projectRoot) {
+                  // specify always creates a new feature dir — jump to it
+                  refreshPipeline(projectRoot, activeStep === "specify");
+                }
                 setRefreshToken((t) => t + 1);
               }}
             />
@@ -95,9 +101,9 @@ export function App() {
         </PanelGroup>
         {showSetup && (
           <ProviderSetup
-            onDone={() => {
+            onDone={(stored) => {
               setShowSetup(false);
-              setHasKey(true);
+              if (stored) setHasKey(true);
             }}
           />
         )}

@@ -143,6 +143,7 @@ pub struct RunStepInput {
     pub model: String,
     /// "ask" | "auto-edit" | "full-auto"; defaults to ask.
     pub approval_mode: Option<String>,
+    pub confirmed: Option<bool>,
 }
 
 fn template_root() -> PathBuf {
@@ -272,16 +273,30 @@ pub async fn run_step(
     // Gate evaluation — structural enforcement before anything else.
     let state = PipelineState::scan(&project_root);
     let feature = feature_or_active(&state, input.feature_slug.as_deref());
-    if let GateVerdict::Block { reason } = evaluate(step, feature, state.has_constitution) {
-        emit(StepStreamPayload::GateBlocked { reason });
-        return Ok(());
+    match evaluate(step, feature, state.has_constitution) {
+        GateVerdict::Block { reason } => {
+            emit(StepStreamPayload::GateBlocked { reason });
+            return Ok(());
+        }
+        GateVerdict::RequireConfirmation { reason } if !input.confirmed.unwrap_or(false) => {
+            emit(StepStreamPayload::GateBlocked {
+                reason: format!("confirmation required — {reason}"),
+            });
+            return Ok(());
+        }
+        _ => {}
     }
 
-    // Resolve feature dir (creating on specify).
-    let feature_dir = match feature {
-        Some(f) => f.dir.clone(),
-        None if step == Step::Specify => next_feature_dir(&project_root, &input.user_input),
-        None => project_root.clone(),
+    // Resolve feature dir. Specify always creates a NEW feature dir — upstream
+    // spec-kit behavior: each specification is a new numbered feature. Editing an
+    // existing spec is done via the artifact editor or clarify, never by re-specifying.
+    let feature_dir = if step == Step::Specify {
+        next_feature_dir(&project_root, &input.user_input)
+    } else {
+        match feature {
+            Some(f) => f.dir.clone(),
+            None => project_root.clone(),
+        }
     };
 
     // Assemble artifact context.

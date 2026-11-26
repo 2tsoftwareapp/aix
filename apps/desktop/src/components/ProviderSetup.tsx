@@ -14,7 +14,7 @@ const PROVIDERS = [
   { id: "qwen", label: "Qwen", hint: "sk-… (DashScope)", source: "bailian.console.aliyun.com" },
 ];
 
-export function ProviderSetup({ onDone }: { onDone: () => void }) {
+export function ProviderSetup({ onDone }: { onDone: (stored: boolean) => void }) {
   const [provider, setProvider] = useState("anthropic");
   const [key, setKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -35,7 +35,7 @@ export function ProviderSetup({ onDone }: { onDone: () => void }) {
       await invoke("store_provider_key", { providerId: provider, key: key.trim() });
       setConfigured((c) => ({ ...c, [provider]: true }));
       toast.success(`${PROVIDERS.find((p) => p.id === provider)?.label} key stored`);
-      onDone();
+      onDone(true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -46,7 +46,7 @@ export function ProviderSetup({ onDone }: { onDone: () => void }) {
   const current = PROVIDERS.find((p) => p.id === provider)!;
 
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) onDone(); }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onDone(false); }}>
       <DialogContent>
         <div className="mb-1 flex items-center gap-2">
           <KeyRound className="h-4 w-4 text-primary" />
@@ -104,7 +104,7 @@ export function ProviderSetup({ onDone }: { onDone: () => void }) {
         {error && <p className="pt-2 text-xs text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="ghost" size="sm" onClick={onDone}>Skip for now</Button>
+          <Button variant="ghost" size="sm" onClick={() => onDone(false)}>Skip for now</Button>
           <Button size="sm" disabled={!key.trim() || busy} onClick={save}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Store key"}
           </Button>

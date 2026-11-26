@@ -18,7 +18,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
   anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
   openai: ["gpt-5.2", "gpt-5.2-mini", "o4-mini"],
   openrouter: ["anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "google/gemini-3-pro"],
-  qwen: ["qwen3-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"],
+  qwen: ["qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus"],
 };
 
 const STEP_HINTS: Record<StepId, string> = {
@@ -142,8 +142,16 @@ export function ChatPanel({
   }, [step, projectRoot, featureSlug, running]);
 
   useEffect(() => {
-    invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey);
+    invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey).catch(() => setProviderHasKey(false));
   }, [providerId, hasKey]);
+
+  // Transcript is per-context: switching step, project, or feature starts a clean
+  // conversation. Otherwise stale messages — and live stream events from a run in
+  // another step — contaminate the view.
+  useEffect(() => {
+    setMessages([]);
+    setApprovals([]);
+  }, [step, projectRoot, featureSlug]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -226,6 +234,7 @@ export function ChatPanel({
           provider_id: providerId,
           model,
           approval_mode: approvalMode,
+          confirmed: gate?.needs_confirmation ? true : undefined,
         },
       });
     } catch (e) {
@@ -401,8 +410,13 @@ export function ChatPanel({
                   <Square className="h-3 w-3" /> Stop
                 </Button>
               ) : (
-                <Button size="sm" disabled={!ready || !input.trim() || gateBlocked} onClick={run}>
-                  <Send className="h-3 w-3" /> Run
+                <Button
+                  size="sm"
+                  variant={gate?.needs_confirmation ? "secondary" : "default"}
+                  disabled={!ready || !input.trim() || gateBlocked}
+                  onClick={run}
+                >
+                  <Send className="h-3 w-3" /> {gate?.needs_confirmation ? "Confirm & run" : "Run"}
                 </Button>
               )}
             </div>

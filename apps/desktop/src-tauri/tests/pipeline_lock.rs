@@ -367,3 +367,25 @@ fn copy_dir(src: &Path, dst: &Path) {
         }
     }
 }
+
+// --- UX-flow regression locks (audit 2026-11-26) ---
+
+#[test]
+fn clarify_writes_spec_md() {
+    // Audit bug B1: clarify output was silently discarded — spec.md never updated.
+    assert_eq!(
+        speckit_core::runner::StepRunner::primary_artifact(speckit_core::steps::Step::Clarify),
+        Some("spec.md"),
+        "clarify must write spec.md — its output is the updated specification"
+    );
+    // analyze and converge stay report-only
+    assert_eq!(
+        speckit_core::runner::StepRunner::primary_artifact(speckit_core::steps::Step::Analyze),
+        None
+    );
+    assert_eq!(
+        speckit_core::runner::StepRunner::primary_artifact(speckit_core::steps::Step::Implement),
+        None,
+        "implement must NOT write a primary artifact — it writes via scoped tools"
+    );
+}
