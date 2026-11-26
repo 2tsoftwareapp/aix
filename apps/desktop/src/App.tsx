@@ -10,6 +10,7 @@ import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ProviderSetup } from "./components/ProviderSetup";
 import { useAppToast } from "./lib/toast";
 import type { PipelineState, StepId } from "./types";
+import type { WorkspaceContext } from "./lib/workspaceSessions";
 import { addRecent, getLastProject } from "./lib/recents";
 import { chooseProjectDirectory } from "./lib/projectDialog";
 
@@ -32,9 +33,13 @@ export function App() {
     async (root: string, selectNewest = false) => {
       try {
         const state = await invoke<PipelineState>("scan_pipeline", { projectRoot: root });
+        if (!state || !Array.isArray(state.features)) {
+          throw new Error("scan_pipeline returned invalid pipeline state");
+        }
         setPipeline(state);
         setActiveFeature((current) => {
           if (!selectNewest && current && state.features.some((f) => f.slug === current)) return current;
+          if (selectNewest) return state.features[state.features.length - 1]?.slug ?? null;
           const remembered = localStorage.getItem("aix-feature");
           const valid = remembered && state.features.some((f) => f.slug === remembered);
           return valid ? remembered : state.features[state.features.length - 1]?.slug ?? null;
@@ -77,6 +82,15 @@ export function App() {
     [pipeline, activeFeature]
   );
 
+  const handleStepDone = useCallback((doneContext: WorkspaceContext | null, completedFeatureSlug: string | null) => {
+    if (projectRoot && (!doneContext || doneContext.projectRoot === projectRoot)) {
+      const completedSpecify = doneContext?.step === "specify" && completedFeatureSlug != null;
+      refreshPipeline(projectRoot, completedSpecify);
+      if (completedSpecify) setActiveStep("specify");
+    }
+    setRefreshToken((t) => t + 1);
+  }, [projectRoot, refreshPipeline]);
+
   return (
     <>
       <AppShell
@@ -102,12 +116,7 @@ export function App() {
               step={activeStep}
               projectRoot={projectRoot}
               featureSlug={activeFeature}
-              onStepDone={() => {
-                if (projectRoot) {
-                  refreshPipeline(projectRoot, activeStep === "specify");
-                }
-                setRefreshToken((t) => t + 1);
-              }}
+              onStepDone={handleStepDone}
               onOpenProject={openProjectPicker}
               onOpenSetup={() => setShowSetup(true)}
             />

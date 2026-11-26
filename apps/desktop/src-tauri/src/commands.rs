@@ -73,12 +73,13 @@ pub fn has_provider_key(provider_id: String) -> bool {
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StepStreamPayload {
+    RunContext { feature_slug: Option<String> },
     Delta { text: String },
     ToolUse { name: String },
     ToolResult { name: String, ok: bool, detail: String },
     ArtifactWritten { path: String },
     GateBlocked { reason: String },
-    Done,
+    Done { feature_slug: Option<String> },
     Error { message: String },
 }
 
@@ -91,19 +92,28 @@ pub struct ApprovalRegistry {
 
 /// Token for the currently-running step, if any. One run at a time —
 /// starting a new run replaces (and implicitly abandons) the old token.
+pub struct ActiveRun {
+    pub run_id: Option<String>,
+    pub token: tokio_util::sync::CancellationToken,
+}
+
 #[derive(Default)]
 pub struct RunCancellation {
-    pub current: Mutex<Option<tokio_util::sync::CancellationToken>>,
+    pub current: Mutex<Option<ActiveRun>>,
 }
 
 #[tauri::command]
-pub fn cancel_run(registry: tauri::State<'_, RunCancellation>) -> Result<(), String> {
-    let token = registry.current.lock().map_err(|e| e.to_string())?.clone();
-    match token {
-        Some(t) => {
-            t.cancel();
+pub fn cancel_run(
+    registry: tauri::State<'_, RunCancellation>,
+    run_id: Option<String>,
+) -> Result<(), String> {
+    let guard = registry.current.lock().map_err(|e| e.to_string())?;
+    match guard.as_ref() {
+        Some(active) if run_id.is_none() || active.run_id == run_id => {
+            active.token.cancel();
             Ok(())
         }
+        Some(_) => Err("run is no longer active".into()),
         None => Err("no run in progress".into()),
     }
 }
@@ -142,6 +152,7 @@ pub enum ApprovalRequestPayload {
 pub struct RunStepInput {
     pub step: String,
     pub project_root: String,
+    pub run_id: Option<String>,
     pub feature_slug: Option<String>,
     pub user_input: String,
     pub provider_id: String,
@@ -255,6 +266,14 @@ fn next_feature_dir(project_root: &Path, user_input: &str) -> PathBuf {
 
 const STREAM_EVENT: &str = "step-stream";
 
+fn payload_with_run_id<T: Serialize>(payload: T, run_id: &Option<String>) -> serde_json::Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("run_id".into(), serde_json::json!(run_id));
+    }
+    value
+}
+
 #[tauri::command]
 pub async fn run_step(
     app: AppHandle,
@@ -267,9 +286,13 @@ pub async fn run_step(
         .current
         .lock()
         .map_err(|e| e.to_string())?
-        .replace(cancel_token.clone());
+        .replace(ActiveRun {
+            run_id: input.run_id.clone(),
+            token: cancel_token.clone(),
+        });
+    let run_id = input.run_id.clone();
     let emit = |p: StepStreamPayload| {
-        let _ = app.emit(STREAM_EVENT, p);
+        let _ = app.emit(STREAM_EVENT, payload_with_run_id(p, &run_id));
     };
 
     let step = parse_step(&input.step)?;
@@ -303,6 +326,20 @@ pub async fn run_step(
             None => project_root.clone(),
         }
     };
+    let run_feature_slug = if step == Step::Specify {
+        feature_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+    } else {
+        feature.map(|f| f.slug.clone())
+    };
+    let mut specify_context_pending = step == Step::Specify;
+    if !specify_context_pending {
+        emit(StepStreamPayload::RunContext {
+            feature_slug: run_feature_slug.clone(),
+        });
+    }
 
     // Assemble artifact context.
     let mut context = Vec::new();
@@ -363,6 +400,7 @@ pub async fn run_step(
         app: &'a AppHandle,
         registry: &'a ApprovalRegistry,
         project_root: &'a Path,
+        run_id: Option<String>,
         mode: executor::ApprovalMode,
         denylist: &'a [String],
     }
@@ -394,12 +432,18 @@ pub async fn run_step(
                 } else {
                     None
                 };
-                let _ = self.app.emit("approval-request", ApprovalRequestPayload::Request {
-                    approval_id,
-                    tool: call.name.clone(),
-                    detail: detail.clone(),
-                    preview,
-                });
+                let _ = self.app.emit(
+                    "approval-request",
+                    payload_with_run_id(
+                        ApprovalRequestPayload::Request {
+                            approval_id,
+                            tool: call.name.clone(),
+                            detail: detail.clone(),
+                            preview,
+                        },
+                        &self.run_id,
+                    ),
+                );
                 match tokio::time::timeout(std::time::Duration::from_secs(600), rx).await {
                     Ok(Ok(v)) => v,
                     _ => false,
@@ -418,11 +462,17 @@ pub async fn run_step(
             }
             match executor::execute_tool(self.project_root, &call.name, &call.input, self.denylist).await {
                 Ok(out) => {
-                    let _ = self.app.emit(STREAM_EVENT, StepStreamPayload::ToolResult {
-                        name: call.name.clone(),
-                        ok: true,
-                        detail,
-                    });
+                    let _ = self.app.emit(
+                        STREAM_EVENT,
+                        payload_with_run_id(
+                            StepStreamPayload::ToolResult {
+                                name: call.name.clone(),
+                                ok: true,
+                                detail,
+                            },
+                            &self.run_id,
+                        ),
+                    );
                     ToolResult {
                         tool_call_id: call.id.clone(),
                         content: out,
@@ -430,11 +480,17 @@ pub async fn run_step(
                     }
                 }
                 Err(e) => {
-                    let _ = self.app.emit(STREAM_EVENT, StepStreamPayload::ToolResult {
-                        name: call.name.clone(),
-                        ok: false,
-                        detail: e.to_string(),
-                    });
+                    let _ = self.app.emit(
+                        STREAM_EVENT,
+                        payload_with_run_id(
+                            StepStreamPayload::ToolResult {
+                                name: call.name.clone(),
+                                ok: false,
+                                detail: e.to_string(),
+                            },
+                            &self.run_id,
+                        ),
+                    );
                     ToolResult {
                         tool_call_id: call.id.clone(),
                         content: format!("error: {e}"),
@@ -452,6 +508,7 @@ pub async fn run_step(
         app: &app,
         registry: &registry,
         project_root: &project_root,
+        run_id: run_id.clone(),
         mode,
         denylist: &denylist,
     };
@@ -526,9 +583,17 @@ pub async fn run_step(
                             let _ = std::fs::create_dir_all(parent);
                         }
                         match std::fs::write(&target, &w.content) {
-                            Ok(_) => emit(StepStreamPayload::ArtifactWritten {
-                                path: target.to_string_lossy().into_owned(),
-                            }),
+                            Ok(_) => {
+                                if specify_context_pending {
+                                    emit(StepStreamPayload::RunContext {
+                                        feature_slug: run_feature_slug.clone(),
+                                    });
+                                    specify_context_pending = false;
+                                }
+                                emit(StepStreamPayload::ArtifactWritten {
+                                    path: target.to_string_lossy().into_owned(),
+                                });
+                            }
                             Err(e) => emit(StepStreamPayload::Error {
                                 message: format!("write failed: {e}"),
                             }),
@@ -564,7 +629,14 @@ pub async fn run_step(
         });
     }
 
-    emit(StepStreamPayload::Done);
+    let done_feature_slug = if step == Step::Specify && specify_context_pending {
+        None
+    } else {
+        run_feature_slug.clone()
+    };
+    emit(StepStreamPayload::Done {
+        feature_slug: done_feature_slug,
+    });
     Ok(())
 }
 
@@ -752,6 +824,43 @@ pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::M
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stream_payload_carries_run_id() {
+        let value = super::payload_with_run_id(
+            super::StepStreamPayload::Delta { text: "hello".into() },
+            &Some("run-1".into()),
+        );
+        assert_eq!(value["kind"], "delta");
+        assert_eq!(value["text"], "hello");
+        assert_eq!(value["run_id"], "run-1");
+    }
+
+    #[test]
+    fn stream_payload_done_serializes_feature_slug() {
+        let value = super::payload_with_run_id(
+            super::StepStreamPayload::Done {
+                feature_slug: Some("001-alpha".into()),
+            },
+            &Some("run-1".into()),
+        );
+        assert_eq!(value["kind"], "done");
+        assert_eq!(value["feature_slug"], "001-alpha");
+        assert_eq!(value["run_id"], "run-1");
+    }
+
+    #[test]
+    fn stream_payload_run_context_serializes_feature_slug() {
+        let value = super::payload_with_run_id(
+            super::StepStreamPayload::RunContext {
+                feature_slug: Some("001-alpha".into()),
+            },
+            &Some("run-1".into()),
+        );
+        assert_eq!(value["kind"], "run_context");
+        assert_eq!(value["feature_slug"], "001-alpha");
+        assert_eq!(value["run_id"], "run-1");
+    }
+
     #[test]
     fn test_strip_pseudo_tool_calls() {
         let input = "# Spec\n\n<tool_call> <function=Bash> <parameter=command>ls</parameter> </function> </tool_call>\n\nReal content here.";

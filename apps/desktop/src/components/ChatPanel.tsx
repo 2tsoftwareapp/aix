@@ -29,6 +29,24 @@ import {
   ChatSystemMessage,
 } from "@astryxdesign/core/Chat";
 import type { StepId } from "../types";
+import {
+  appendMessage,
+  appendStreamDelta,
+  stepWorkspaceMatches,
+  workspaceKey,
+  type ApprovalReq,
+  type Msg,
+  type WorkspaceContext,
+} from "../lib/workspaceSessions";
+import {
+  registerRun,
+  rekeyRunWorkspace,
+  removeApprovalEverywhere,
+  updateRunWorkspace,
+  updateWorkspace,
+  useWorkspaces,
+  workspaceContextForRun,
+} from "../lib/workspaceStore";
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -54,7 +72,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
 
 const STEP_HINTS: Record<StepId, string> = {
   constitution: "Define project principles — evaluated against every later phase.",
-  specify: "Describe what to build and why. No tech stack here — that belongs in Plan.",
+  specify: "Create a new numbered feature describing what to build and why. After the run, the new feature and spec open automatically.",
   clarify: "Resolve ambiguity before planning. Up to 5 targeted questions per run.",
   plan: "Tech stack, architecture, and technical constraints.",
   checklist: "Unit tests for your requirements — reviewer-owned quality gates.",
@@ -70,32 +88,18 @@ const APPROVAL_MODE_HINTS: Record<string, string> = {
   "full-auto": "full-auto — no approval gates (use with care)",
 };
 
-type StreamPayload =
+type StreamPayload = { run_id?: string | null } & (
+  | { kind: "run_context"; feature_slug: string | null }
   | { kind: "delta"; text: string }
   | { kind: "tool_use"; name: string }
   | { kind: "tool_result"; name: string; ok: boolean; detail: string }
   | { kind: "artifact_written"; path: string }
   | { kind: "gate_blocked"; reason: string }
-  | { kind: "done" }
-  | { kind: "error"; message: string };
+  | { kind: "done"; feature_slug: string | null }
+  | { kind: "error"; message: string }
+);
 
-interface Msg {
-  role: "user" | "assistant" | "system";
-  text: string;
-  variant?: "info" | "success" | "error" | "warning" | "tool";
-}
-
-interface ApprovalReq {
-  approval_id: string;
-  tool: string;
-  detail: string;
-  preview: string | null;
-  step: StepId;
-  projectRoot: string | null;
-  featureSlug: string | null;
-}
-
-function SystemLine({ msg }: { msg: Msg }) {
+function SystemLine({ msg }: { msg: Extract<Msg, { role: "system" }> }) {
   const icon =
     msg.variant === "success" ? CheckCircle2
     : msg.variant === "error" ? XCircle
@@ -209,14 +213,12 @@ export function ChatPanel({
   step: StepId;
   projectRoot: string | null;
   featureSlug: string | null;
-  onStepDone: () => void;
+  onStepDone: (context: WorkspaceContext | null, completedFeatureSlug: string | null) => void;
   onOpenProject: () => Promise<void>;
   onOpenSetup: () => void;
 }) {
   const toast = useAppToast();
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [running, setRunning] = useState(false);
+  const workspaces = useWorkspaces();
   const [providerId, setProviderId] = useState(() => localStorage.getItem("aix-provider") ?? "anthropic");
   const [model, setModel] = useState(() => localStorage.getItem("aix-model") ?? "claude-sonnet-4-5");
   const [approvalMode, setApprovalMode] = useState(() => localStorage.getItem("aix-approval-mode") ?? "ask");
@@ -224,13 +226,37 @@ export function ChatPanel({
   const providerHasKey = !!keyStatus[providerId];
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
   const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
-  const [approvals, setApprovals] = useState<ApprovalReq[]>([]);
   const modelQueryRef = useRef("");
-  const approvalContextRef = useRef({ step, projectRoot, featureSlug });
+  const context: WorkspaceContext | null = projectRoot ? { projectRoot, featureSlug, step } : null;
+  const key = context ? workspaceKey(context.projectRoot, context.featureSlug, context.step) : null;
+  const workspace = key ? workspaces[key] : undefined;
+  const input = workspace?.draft ?? "";
+  const messages = workspace?.messages ?? [];
+  const approvals = workspace?.approvals ?? [];
+  const running = workspace?.running ?? false;
+  const activeRunId = workspace?.activeRunId ?? null;
+  const failedPrompt = workspace?.failedPrompt ?? null;
+  const anyRunning = Object.values(workspaces).some((candidate) => candidate.running);
+  const otherRun = Object.values(workspaces).find((candidate) => candidate.running && candidate.key !== key);
+  const currentContextRef = useRef<{ key: string | null; context: WorkspaceContext | null }>({ key: null, context: null });
 
   useEffect(() => {
-    approvalContextRef.current = { step, projectRoot, featureSlug };
-  }, [step, projectRoot, featureSlug]);
+    currentContextRef.current = { key, context };
+  }, [key, context]);
+
+  const setInput = (value: string) => {
+    if (!key || !context) return;
+    updateWorkspace(key, context, (current) => ({ ...current, draft: value }));
+  };
+
+  const applyToRoutedWorkspace = (
+    runId: string | null | undefined,
+    updater: Parameters<typeof updateWorkspace>[2],
+  ) => {
+    if (updateRunWorkspace(runId, updater)) return;
+    const current = currentContextRef.current;
+    if (current.key && current.context) updateWorkspace(current.key, current.context, updater);
+  };
 
   useEffect(() => {
     const CACHE_KEY = "aix-openrouter-catalog";
@@ -292,41 +318,47 @@ export function ChatPanel({
   }, [keyStatus, providerId, toast]);
 
   useEffect(() => {
-    setMessages([]);
-  }, [step, projectRoot, featureSlug]);
-
-  useEffect(() => {
     const unlisten = listen<StreamPayload>("step-stream", (ev) => {
       const p = ev.payload;
-      if (p.kind === "delta") {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = { ...last, text: last.text + p.text };
-          } else {
-            next.push({ role: "assistant", text: p.text });
-          }
-          return next;
-        });
+      if (p.kind === "run_context") {
+        rekeyRunWorkspace(p.run_id, p.feature_slug);
+      } else if (p.kind === "delta") {
+        applyToRoutedWorkspace(p.run_id, (current) => appendStreamDelta(current, p.text));
       } else if (p.kind === "tool_result") {
-        setMessages((prev) => [
-          ...prev,
-          { role: "system", variant: p.ok ? "tool" : "error", text: `${p.name} — ${p.detail}` },
-        ]);
+        applyToRoutedWorkspace(p.run_id, (current) => appendMessage(current, {
+          role: "system",
+          variant: p.ok ? "tool" : "error",
+          text: `${p.name} — ${p.detail}`,
+        }));
       } else if (p.kind === "artifact_written") {
-        setMessages((prev) => [...prev, { role: "system", variant: "success", text: `artifact written: ${p.path}` }]);
+        applyToRoutedWorkspace(p.run_id, (current) => appendMessage(current, {
+          role: "system",
+          variant: "success",
+          text: `artifact written: ${p.path}`,
+        }));
       } else if (p.kind === "gate_blocked") {
-        setMessages((prev) => [...prev, { role: "system", variant: "error", text: `gate blocked: ${p.reason}` }]);
-        setRunning(false);
+        applyToRoutedWorkspace(p.run_id, (current) => ({
+          ...appendMessage(current, { role: "system", variant: "error", text: `gate blocked: ${p.reason}` }),
+          running: false,
+          activeRunId: null,
+        }));
       } else if (p.kind === "error") {
-        setMessages((prev) => [...prev, { role: "system", variant: "error", text: `error: ${p.message}` }]);
-        setApprovals([]);
-        setRunning(false);
+        applyToRoutedWorkspace(p.run_id, (current) => ({
+          ...appendMessage(current, { role: "system", variant: "error", text: `error: ${p.message}` }),
+          approvals: [],
+          running: false,
+          activeRunId: null,
+          failedPrompt: current.lastPrompt,
+        }));
       } else if (p.kind === "done") {
-        setApprovals([]);
-        setRunning(false);
-        onStepDone();
+        const doneContext = workspaceContextForRun(p.run_id);
+        applyToRoutedWorkspace(p.run_id, (current) => ({
+          ...current,
+          approvals: [],
+          running: false,
+          activeRunId: null,
+        }));
+        onStepDone(doneContext, p.feature_slug);
       }
     });
     return () => { unlisten.then((f) => f()); };
@@ -334,42 +366,57 @@ export function ChatPanel({
 
   useEffect(() => {
     const unlisten = listen<{
-      kind: string; approval_id: string; tool: string; detail: string; preview: string | null;
+      kind: string; approval_id: string; tool: string; detail: string; preview: string | null; run_id?: string | null;
     }>("approval-request", (ev) => {
-      if (ev.payload.kind === "request") {
-        const context = approvalContextRef.current;
-        setApprovals((prev) => [
-          ...prev,
+      if (ev.payload.kind !== "request") return;
+      applyToRoutedWorkspace(ev.payload.run_id, (current) => ({
+        ...current,
+        approvals: [
+          ...current.approvals,
           {
             approval_id: ev.payload.approval_id,
             tool: ev.payload.tool,
             detail: ev.payload.detail,
             preview: ev.payload.preview,
-            step: context.step,
-            projectRoot: context.projectRoot,
-            featureSlug: context.featureSlug,
+            step: current.step,
+            projectRoot: current.projectRoot,
+            featureSlug: current.featureSlug,
+            runId: ev.payload.run_id ?? undefined,
           },
-        ]);
-      }
+        ],
+      }));
     });
     return () => { unlisten.then((f) => f()); };
   }, []);
 
   const answerApproval = async (id: string, approved: boolean) => {
-    setApprovals((prev) => prev.filter((a) => a.approval_id !== id));
+    const request = approvals.find((approval) => approval.approval_id === id);
+    removeApprovalEverywhere(id);
     try {
       await invoke("respond_approval", { approvalId: id, approved });
     } catch (e) {
-      setMessages((prev) => [...prev, { role: "system", variant: "error", text: `approval response failed: ${e}` }]);
+      applyToRoutedWorkspace(request?.runId, (current) => appendMessage(current, {
+        role: "system",
+        variant: "error",
+        text: `approval response failed: ${e}`,
+      }));
     }
   };
 
   const run = async (submitted = input) => {
-    if (!projectRoot || !submitted.trim() || (gate && !gate.allowed) || running) return;
-    setRunning(true);
-    setMessages((prev) => [...prev, { role: "user", text: submitted }]);
+    if (!projectRoot || !context || !key || !submitted.trim() || (gate && !gate.allowed) || running || anyRunning) return;
     const userInput = submitted;
-    setInput("");
+    const runId = crypto.randomUUID();
+    registerRun(runId, key);
+    updateWorkspace(key, context, (current) => ({
+      ...current,
+      draft: "",
+      messages: [...current.messages, { role: "user", text: userInput }],
+      running: true,
+      activeRunId: runId,
+      failedPrompt: null,
+      lastPrompt: userInput,
+    }));
     const typedModel = modelQueryRef.current.trim();
     const effectiveModel = typedModel || model;
     if (typedModel && typedModel !== model) setModel(typedModel);
@@ -384,11 +431,16 @@ export function ChatPanel({
           model: effectiveModel,
           approval_mode: approvalMode,
           confirmed: gate?.needs_confirmation ? true : undefined,
+          run_id: runId,
         },
       });
     } catch (e) {
-      setMessages((prev) => [...prev, { role: "system", variant: "error", text: `invoke failed: ${e}` }]);
-      setRunning(false);
+      updateRunWorkspace(runId, (current) => ({
+        ...appendMessage(current, { role: "system", variant: "error", text: `invoke failed: ${e}` }),
+        running: false,
+        activeRunId: null,
+        failedPrompt: userInput,
+      }));
     }
   };
 
@@ -407,11 +459,10 @@ export function ChatPanel({
   }), [modelIds]);
   const selectedModel = useMemo<ModelSearchItem>(() => ({ id: model, label: model }), [model]);
 
-  const visibleApprovals = approvals.filter(
-    (a) => a.step === step && a.projectRoot === projectRoot && a.featureSlug === featureSlug,
-  );
-  const hiddenApproval = approvals.find(
-    (a) => !(a.step === step && a.projectRoot === projectRoot && a.featureSlug === featureSlug),
+  const hiddenApprovalWorkspace = Object.values(workspaces).find((candidate) =>
+    candidate.key !== key
+    && candidate.projectRoot === projectRoot
+    && candidate.approvals.length > 0
   );
 
   const messageNodes = [
@@ -441,13 +492,13 @@ export function ChatPanel({
         <Text type="supporting" color="secondary">thinking…</Text>
       </ChatSystemMessage>,
     ] : []),
-    ...visibleApprovals.map((a) => (
+    ...approvals.map((a) => (
       <ApprovalCard key={a.approval_id} req={a} onAnswer={answerApproval} />
     )),
-    ...(hiddenApproval ? [
+    ...(hiddenApprovalWorkspace ? [
       <ChatSystemMessage key="hidden-approval" icon={<Icon icon={ShieldQuestion} size="sm" color="warning" />}>
         <Text type="supporting" color="secondary">
-          Approval pending in {hiddenApproval.step}; return to that step to review it.
+          Approval pending in {hiddenApprovalWorkspace.step}{hiddenApprovalWorkspace.featureSlug ? ` · ${hiddenApprovalWorkspace.featureSlug}` : ""}; select that step in the sidebar to review it.
         </Text>
       </ChatSystemMessage>,
     ] : []),
@@ -457,7 +508,11 @@ export function ChatPanel({
     ? { type: "error" as const, message: `${step} is blocked — ${gate.reason}` }
     : gate?.allowed && gate.needs_confirmation
       ? { type: "warning" as const, message: gate.reason ?? "Confirmation required" }
-      : undefined;
+      : otherRun
+        ? { type: "warning" as const, message: `${otherRun.step} is running; output is kept with that step.` }
+        : failedPrompt
+          ? { type: "warning" as const, message: "Last run failed — the prompt can be restored below." }
+          : undefined;
 
   return (
     <VStack height="100%" width="100%" gap={0}>
@@ -503,6 +558,21 @@ export function ChatPanel({
               status={composerStatus}
               footerActions={
                 <HStack gap={1} vAlign="center" wrap="wrap">
+                  {failedPrompt && (
+                    <Button
+                      label="Restore prompt"
+                      variant="secondary"
+                      size="md"
+                      onClick={() => {
+                        if (!key || !context) return;
+                        updateWorkspace(key, context, (current) => ({
+                          ...current,
+                          draft: failedPrompt,
+                          failedPrompt: null,
+                        }));
+                      }}
+                    />
+                  )}
                   <Selector
                     label="Provider"
                     isLabelHidden
@@ -565,7 +635,7 @@ export function ChatPanel({
                     variant="destructive"
                     size="md"
                     icon={<Icon icon={Square} size="sm" />}
-                    onClick={() => invoke("cancel_run").catch(() => {})}
+                    onClick={() => invoke("cancel_run", { runId: activeRunId }).catch(() => {})}
                   />
                 ) : projectRoot && !providerHasKey ? (
                   <Button
@@ -581,7 +651,7 @@ export function ChatPanel({
                     variant="primary"
                     size="md"
                     icon={<Icon icon={Send} size="sm" />}
-                    isDisabled={!ready || !input.trim() || gateBlocked}
+                    isDisabled={!ready || !input.trim() || gateBlocked || anyRunning}
                     onClick={() => void run()}
                   />
                 )
