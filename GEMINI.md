@@ -671,3 +671,6 @@ For any non-trivial task, you must generate and update the following artifacts i
 
 # Agents
 
+<!-- ASTRYX:START -->
+@./AGENTS.md
+<!-- ASTRYX:END -->

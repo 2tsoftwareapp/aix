@@ -28,5 +28,11 @@
     "packages/*",
     "services/*",
     "apps/*"
-  ]
+  ],
+  "dependencies": {
+    "@astryxdesign/cli": "^0.7.17",
+    "@astryxdesign/core": "^0.7.17",
+    "@astryxdesign/theme-neutral": "^0.7.17",
+    "@stylexjs/stylex": "^0.19.2"
+  }
 }
