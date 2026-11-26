@@ -15,6 +15,7 @@ export function App() {
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
+  const [keyVersion, setKeyVersion] = useState(0);
   const [showSetup, setShowSetup] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -83,7 +84,7 @@ export function App() {
               step={activeStep}
               projectRoot={projectRoot}
               featureSlug={activeFeature}
-              hasKey={hasKey}
+              hasKey={keyVersion}
               onStepDone={() => {
                 if (projectRoot) {
                   // specify always creates a new feature dir — jump to it
@@ -110,7 +111,12 @@ export function App() {
           <ProviderSetup
             onDone={(stored) => {
               setShowSetup(false);
-              if (stored) setHasKey(true);
+              if (stored) {
+                setHasKey(true);
+                // boolean hasKey can't re-fire effects when already true —
+                // a version counter guarantees the key-status refresh runs
+                setKeyVersion((v) => v + 1);
+              }
             }}
           />
         )}

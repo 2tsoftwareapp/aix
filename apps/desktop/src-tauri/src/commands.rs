@@ -700,3 +700,11 @@ fn uuid_simple() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("appr-{:x}-{:x}", nanos, std::process::id())
 }
+
+#[tauri::command]
+pub async fn list_openrouter_models() -> Result<Vec<providers::models::ModelInfo>, String> {
+    let client = reqwest::Client::new();
+    providers::models::fetch_openrouter_models(&client)
+        .await
+        .map_err(|e| e.to_string())
+}

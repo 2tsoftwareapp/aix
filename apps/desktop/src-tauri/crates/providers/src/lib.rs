@@ -5,6 +5,7 @@ pub mod anthropic;
 pub mod credentials;
 pub mod http;
 pub mod live;
+pub mod models;
 pub mod openai_compat;
 pub mod sse;
 

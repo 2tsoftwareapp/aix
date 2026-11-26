@@ -130,7 +130,7 @@ export function ChatPanel({
   step: StepId;
   projectRoot: string | null;
   featureSlug: string | null;
-  hasKey: boolean;
+  hasKey: number;
   onStepDone: () => void;
 }) {
   const [input, setInput] = useState("");
@@ -142,6 +142,28 @@ export function ChatPanel({
   const [providerHasKey, setProviderHasKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
+  const [openrouterModels, setOpenrouterModels] = useState<string[]>([]);
+
+  // Live OpenRouter catalog: the /models endpoint is public, so the combobox
+  // can offer current models instead of the aging hardcoded list. Cached 24h.
+  useEffect(() => {
+    if (providerId !== "openrouter") return;
+    const CACHE_KEY = "aix-openrouter-models";
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
+      if (cached && Date.now() - cached.at < 24 * 3600 * 1000) {
+        setOpenrouterModels(cached.ids);
+        return;
+      }
+    } catch { /* fall through to fetch */ }
+    invoke<{ id: string }[]>("list_openrouter_models")
+      .then((models) => {
+        const ids = models.map((m) => m.id);
+        setOpenrouterModels(ids);
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
+      })
+      .catch(() => { /* static fallback list remains */ });
+  }, [providerId]);
 
   useEffect(() => {
     if (!projectRoot) return;
@@ -161,7 +183,19 @@ export function ChatPanel({
       ["anthropic", "openai", "openrouter", "qwen"].map(
         async (p) => [p, await invoke<boolean>("has_provider_key", { providerId: p }).catch(() => false)] as const
       )
-    ).then((entries) => setKeyStatus(Object.fromEntries(entries)));
+    ).then((entries) => {
+      const status = Object.fromEntries(entries);
+      setKeyStatus(status);
+      // Storing a key for provider X must make the composer usable: if the
+      // selected provider has no key but another one does, switch to it.
+      if (!status[providerId]) {
+        const first = ["anthropic", "openai", "openrouter", "qwen"].find((p) => status[p]);
+        if (first) {
+          setProviderId(first);
+          setModel(MODEL_OPTIONS[first][0]);
+        }
+      }
+    });
   }, [hasKey]);
 
   // Transcript is per-context: switching step, project, or feature starts a clean
@@ -296,7 +330,12 @@ export function ChatPanel({
           <Combobox
             value={model}
             onChange={setModel}
-            options={MODEL_OPTIONS[providerId]}
+            options={
+              providerId === "openrouter" && openrouterModels.length > 0
+                ? [...MODEL_OPTIONS.openrouter.filter((m) => openrouterModels.includes(m)),
+                   ...openrouterModels.filter((m) => !MODEL_OPTIONS.openrouter.includes(m))]
+                : MODEL_OPTIONS[providerId]
+            }
             className="w-[200px]"
           />
           <Tooltip>
