@@ -11,7 +11,7 @@ fn template_count() -> Result<usize, String> {
     let root = if let Ok(p) = std::env::var("AIX_SPECKIT_CONTENT") {
         p.into()
     } else {
-        std::path::PathBuf::from("../../content/speckit")
+        std::path::PathBuf::from("../../../content/speckit")
     };
     let store = TemplateStore::load_verified(&root).map_err(|e| e.to_string())?;
     Ok(store.len())

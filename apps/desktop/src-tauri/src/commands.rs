@@ -150,7 +150,7 @@ fn template_root() -> PathBuf {
         return p.into();
     }
     // dev fallback: repo content/speckit relative to src-tauri
-    let dev = PathBuf::from("../../content/speckit");
+    let dev = PathBuf::from("../../../content/speckit");
     if dev.is_dir() {
         return dev;
     }
