@@ -7,6 +7,8 @@ import {
   Wrench,
   Sparkles, AlertTriangle, Ban, Sprout, KeyRound, FolderOpen,
 } from "lucide-react";
+import { useKeyStatus } from "../lib/providerKeys";
+import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Card, CardContent } from "./ui/card";
@@ -139,8 +141,8 @@ export function ChatPanel({
   const [providerId, setProviderId] = useState("anthropic");
   const [model, setModel] = useState("claude-sonnet-4-5");
   const [approvalMode, setApprovalMode] = useState("ask");
-  const [providerHasKey, setProviderHasKey] = useState(false);
-  const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
+  const keyStatus = useKeyStatus();
+  const providerHasKey = !!keyStatus[providerId];
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
   const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
 
@@ -178,29 +180,20 @@ export function ChatPanel({
     }).then(setGate).catch(() => setGate(null));
   }, [step, projectRoot, featureSlug, running]);
 
-  useEffect(() => {
-    invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey).catch(() => setProviderHasKey(false));
-  }, [providerId, hasKey]);
 
+
+  // Auto-switch: storing a key for provider X must make the composer usable.
+  // If the selected provider has no key but another one does, switch and say so.
   useEffect(() => {
-    Promise.all(
-      ["anthropic", "openai", "openrouter", "qwen"].map(
-        async (p) => [p, await invoke<boolean>("has_provider_key", { providerId: p }).catch(() => false)] as const
-      )
-    ).then((entries) => {
-      const status = Object.fromEntries(entries);
-      setKeyStatus(status);
-      // Storing a key for provider X must make the composer usable: if the
-      // selected provider has no key but another one does, switch to it.
-      if (!status[providerId]) {
-        const first = ["anthropic", "openai", "openrouter", "qwen"].find((p) => status[p]);
-        if (first) {
-          setProviderId(first);
-          setModel(MODEL_OPTIONS[first][0]);
-        }
+    if (!keyStatus[providerId]) {
+      const first = ["anthropic", "openai", "openrouter", "qwen"].find((p) => keyStatus[p]);
+      if (first) {
+        setProviderId(first);
+        setModel(MODEL_OPTIONS[first][0]);
+        toast.info(`Switched to ${first} — the configured provider`);
       }
-    });
-  }, [hasKey]);
+    }
+  }, [keyStatus]);
 
   // Transcript is per-context: switching step, project, or feature starts a clean
   // conversation. Otherwise stale messages — and live stream events from a run in

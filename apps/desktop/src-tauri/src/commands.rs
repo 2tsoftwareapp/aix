@@ -61,6 +61,11 @@ pub fn store_provider_key(provider_id: String, key: String) -> Result<String, St
 }
 
 #[tauri::command]
+pub fn delete_provider_key(provider_id: String) -> Result<(), String> {
+    providers::credentials::delete(&provider_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn has_provider_key(provider_id: String) -> bool {
     providers::credentials::retrieve(&provider_id).is_ok()
 }
