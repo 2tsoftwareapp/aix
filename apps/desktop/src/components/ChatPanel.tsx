@@ -3,6 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { StepId } from "../types";
 
+const MODEL_OPTIONS: Record<string, string[]> = {
+  anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  openai: ["gpt-5.2", "gpt-5.2-mini", "o4-mini"],
+  openrouter: ["anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "google/gemini-3-pro"],
+};
+
 const STEP_HINTS: Record<StepId, string> = {
   constitution: "Define project principles — evaluated against every later phase.",
   specify: "Describe what to build and why. No tech stack here — that belongs in Plan.",
@@ -51,6 +57,14 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [running, setRunning] = useState(false);
+  const [providerId, setProviderId] = useState("anthropic");
+  const [model, setModel] = useState("claude-sonnet-4-5");
+  const [approvalMode, setApprovalMode] = useState("ask");
+  const [providerHasKey, setProviderHasKey] = useState(false);
+
+  useEffect(() => {
+    invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey);
+  }, [providerId, hasKey]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -137,9 +151,9 @@ export function ChatPanel({
           project_root: projectRoot,
           feature_slug: featureSlug,
           user_input: userInput,
-          provider_id: "anthropic",
-          model: "claude-sonnet-4-5",
-          approval_mode: "ask",
+          provider_id: providerId,
+          model,
+          approval_mode: approvalMode,
         },
       });
     } catch (e) {
@@ -148,7 +162,9 @@ export function ChatPanel({
     }
   };
 
-  const ready = projectRoot && hasKey;
+  // hasKey prop reflects "any key configured" (drives setup modal);
+  // readiness requires a key for the *selected* provider.
+  const ready = projectRoot && providerHasKey;
 
   return (
     <section className="flex flex-1 flex-col min-w-0">
@@ -157,11 +173,45 @@ export function ChatPanel({
           <h1 className="text-sm font-medium capitalize">{step}</h1>
           <p className="text-xs text-ink-faint">{STEP_HINTS[step]}</p>
         </div>
-        {featureSlug && (
-          <span className="rounded bg-surface-overlay px-2 py-1 font-mono text-xs text-ink-dim">
-            {featureSlug}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {featureSlug && (
+            <span className="rounded bg-surface-overlay px-2 py-1 font-mono text-xs text-ink-dim">
+              {featureSlug}
+            </span>
+          )}
+          <select
+            value={providerId}
+            onChange={(e) => {
+              const p = e.target.value;
+              setProviderId(p);
+              setModel(MODEL_OPTIONS[p][0]);
+            }}
+            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none"
+          >
+            <option value="anthropic">anthropic</option>
+            <option value="openai">openai</option>
+            <option value="openrouter">openrouter</option>
+          </select>
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none font-mono"
+          >
+            {MODEL_OPTIONS[providerId].map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <select
+            value={approvalMode}
+            onChange={(e) => setApprovalMode(e.target.value)}
+            title="Approval mode: ask = every tool, auto-edit = shell only, full-auto = none"
+            className="rounded border border-edge bg-surface px-2 py-1 text-xs text-ink-dim outline-none"
+          >
+            <option value="ask">ask</option>
+            <option value="auto-edit">auto-edit</option>
+            <option value="full-auto">full-auto</option>
+          </select>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
@@ -170,7 +220,9 @@ export function ChatPanel({
             <div className="text-center text-ink-faint text-sm">
               <p className="mb-2 text-4xl">🌱</p>
               {!projectRoot && <p>Open a project folder in the sidebar to begin.</p>}
-              {projectRoot && !hasKey && <p>Configure a provider key first.</p>}
+              {projectRoot && !providerHasKey && (
+                <p>No key stored for {providerId} — open Provider settings in the sidebar.</p>
+              )}
               {ready && (
                 <p>
                   Describe the input for{" "}

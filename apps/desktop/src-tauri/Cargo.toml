@@ -5,6 +5,7 @@ members = [
     "crates/providers",
     "crates/executor",
     "crates/app-state",
+    "crates/agent-loop",
 ]
 resolver = "2"
 
@@ -40,6 +41,8 @@ speckit-core = { path = "crates/speckit-core" }
 providers = { path = "crates/providers" }
 executor = { path = "crates/executor" }
 futures-util = "0.3"
+async-trait = "0.1"
+agent-loop = { path = "crates/agent-loop" }
 app-state = { path = "crates/app-state" }
 
 [profile.release]

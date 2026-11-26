@@ -1,0 +1,15 @@
+[package]
+name = "agent-loop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+providers = { path = "../providers" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros"] }

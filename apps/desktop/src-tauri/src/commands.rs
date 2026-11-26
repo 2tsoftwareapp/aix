@@ -3,9 +3,8 @@
 //! run_step flow: gate evaluation → context assembly → verbatim template prompt
 //! → provider streaming (relayed as Tauri events) → write sanitization → disk.
 
-use futures_util::StreamExt;
 use providers::live::{AnthropicProvider, OpenAiCompatProvider};
-use providers::{CompletionRequest, Credential, Message, Provider, Role, ToolResult};
+use providers::{Credential, Provider, ToolResult};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
@@ -167,11 +166,25 @@ fn make_provider(provider_id: &str) -> Result<Box<dyn Provider>, String> {
     })
 }
 
+/// Per-artifact context budget (~25k tokens at 4 chars/token). Oversized artifacts
+/// are truncated with an explicit marker so the model knows content is missing —
+/// silent truncation here would corrupt downstream artifacts.
+const ARTIFACT_CONTEXT_BUDGET: usize = 100_000;
+
 fn read_context(path: &Path, rel: &str) -> Option<ArtifactContext> {
     let full = path.join(rel);
     std::fs::read_to_string(full).ok().map(|content| ArtifactContext {
         rel_path: rel.to_string(),
-        content,
+        content: if content.len() > ARTIFACT_CONTEXT_BUDGET {
+            format!(
+                "{}\n\n[TRUNCATED: artifact is {} chars, budget {} — read the file directly if sections are missing]",
+                &content[..ARTIFACT_CONTEXT_BUDGET],
+                content.len(),
+                ARTIFACT_CONTEXT_BUDGET
+            )
+        } else {
+            content
+        },
     })
 }
 
@@ -294,98 +307,38 @@ pub async fn run_step(
     let use_tools = step == Step::Implement;
     let tools = if use_tools { executor::tool_defs() } else { vec![] };
 
-    let mut messages = vec![Message {
-        role: Role::User,
-        content: user_msg,
-        tool_calls: vec![],
-        tool_results: vec![],
-    }];
-    let mut final_text = String::new();
-    let mut iterations = 0u32;
+    struct TauriExecutor<'a> {
+        app: &'a AppHandle,
+        registry: &'a ApprovalRegistry,
+        project_root: &'a Path,
+        mode: executor::ApprovalMode,
+        denylist: &'a [String],
+    }
 
-    loop {
-        iterations += 1;
-        if iterations > 40 {
-            emit(StepStreamPayload::Error {
-                message: "agent loop exceeded 40 iterations — stopping".into(),
-            });
-            return Ok(());
-        }
-        let req = CompletionRequest {
-            model: input.model.clone(),
-            system: Some(system.clone()),
-            messages: messages.clone(),
-            tools: tools.clone(),
-            max_tokens: 8192,
-        };
-        let mut stream = match provider.complete(req).await {
-            Ok(s) => s,
-            Err(e) => {
-                emit(StepStreamPayload::Error {
-                    message: e.to_string(),
-                });
-                return Ok(());
-            }
-        };
-        let mut turn_text = String::new();
-        let mut turn_calls: Vec<providers::ToolCall> = Vec::new();
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(providers::StreamEvent::TextDelta { text }) => {
-                    turn_text.push_str(&text);
-                    emit(StepStreamPayload::Delta { text });
-                }
-                Ok(providers::StreamEvent::ToolUse { call }) => {
-                    emit(StepStreamPayload::ToolUse {
-                        name: call.name.clone(),
-                    });
-                    turn_calls.push(call);
-                }
-                Ok(providers::StreamEvent::Done) => break,
-                Ok(providers::StreamEvent::Error { message }) => {
-                    emit(StepStreamPayload::Error { message });
-                    return Ok(());
-                }
-                Ok(providers::StreamEvent::Usage { .. }) => {}
-                Err(e) => {
-                    emit(StepStreamPayload::Error {
-                        message: e.to_string(),
-                    });
-                    return Ok(());
-                }
-            }
-        }
-
-        if turn_calls.is_empty() {
-            final_text = turn_text;
-            break;
-        }
-
-        // Record the assistant turn (text + tool calls), then execute each call.
-        messages.push(Message {
-            role: Role::Assistant,
-            content: turn_text,
-            tool_calls: turn_calls.clone(),
-            tool_results: vec![],
-        });
-
-        let mut results = Vec::new();
-        for call in &turn_calls {
+    #[async_trait::async_trait]
+    impl agent_loop::ToolExecutor for TauriExecutor<'_> {
+        async fn execute(&self, call: &providers::ToolCall) -> ToolResult {
             let detail = summarize_tool_call(call);
-            let approved = if executor::tool_requires_approval(&call.name, mode) {
+            let approved = if executor::tool_requires_approval(&call.name, self.mode) {
                 let approval_id = uuid_simple();
                 let (tx, rx) = oneshot::channel::<bool>();
-                registry
-                    .pending
-                    .lock()
-                    .map_err(|e| e.to_string())?
-                    .insert(approval_id.clone(), tx);
-                let _ = app.emit("approval-request", ApprovalRequestPayload::Request {
-                    approval_id: approval_id.clone(),
+                match self.registry.pending.lock() {
+                    Ok(mut pending) => {
+                        pending.insert(approval_id.clone(), tx);
+                    }
+                    Err(_) => {
+                        return ToolResult {
+                            tool_call_id: call.id.clone(),
+                            content: "approval registry poisoned".into(),
+                            is_error: true,
+                        };
+                    }
+                }
+                let _ = self.app.emit("approval-request", ApprovalRequestPayload::Request {
+                    approval_id,
                     tool: call.name.clone(),
                     detail: detail.clone(),
                 });
-                // 10-minute outer bound so a closed UI can't hang the loop forever.
                 match tokio::time::timeout(std::time::Duration::from_secs(600), rx).await {
                     Ok(Ok(v)) => v,
                     _ => false,
@@ -394,50 +347,91 @@ pub async fn run_step(
                 true
             };
 
-            executor::audit_append(&project_root, &call.name, &detail, approved);
-            let result = if approved {
-                match executor::execute_tool(&project_root, &call.name, &call.input, &denylist).await {
-                    Ok(out) => {
-                        emit(StepStreamPayload::ToolResult {
-                            name: call.name.clone(),
-                            ok: true,
-                            detail: detail.clone(),
-                        });
-                        ToolResult {
-                            tool_call_id: call.id.clone(),
-                            content: out,
-                            is_error: false,
-                        }
-                    }
-                    Err(e) => {
-                        emit(StepStreamPayload::ToolResult {
-                            name: call.name.clone(),
-                            ok: false,
-                            detail: e.to_string(),
-                        });
-                        ToolResult {
-                            tool_call_id: call.id.clone(),
-                            content: format!("error: {e}"),
-                            is_error: true,
-                        }
-                    }
-                }
-            } else {
-                ToolResult {
+            executor::audit_append(self.project_root, &call.name, &detail, approved);
+            if !approved {
+                return ToolResult {
                     tool_call_id: call.id.clone(),
                     content: "denied by user".into(),
                     is_error: true,
+                };
+            }
+            match executor::execute_tool(self.project_root, &call.name, &call.input, self.denylist).await {
+                Ok(out) => {
+                    let _ = self.app.emit(STREAM_EVENT, StepStreamPayload::ToolResult {
+                        name: call.name.clone(),
+                        ok: true,
+                        detail,
+                    });
+                    ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: out,
+                        is_error: false,
+                    }
                 }
-            };
-            results.push(result);
+                Err(e) => {
+                    let _ = self.app.emit(STREAM_EVENT, StepStreamPayload::ToolResult {
+                        name: call.name.clone(),
+                        ok: false,
+                        detail: e.to_string(),
+                    });
+                    ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: format!("error: {e}"),
+                        is_error: true,
+                    }
+                }
+            }
         }
-        messages.push(Message {
-            role: Role::User,
-            content: String::new(),
-            tool_calls: vec![],
-            tool_results: results,
-        });
+        fn describe(&self, call: &providers::ToolCall) -> String {
+            summarize_tool_call(call)
+        }
     }
+
+    let tauri_executor = TauriExecutor {
+        app: &app,
+        registry: &registry,
+        project_root: &project_root,
+        mode,
+        denylist: &denylist,
+    };
+    let loop_config = agent_loop::LoopConfig {
+        model: input.model.clone(),
+        system: system.clone(),
+        tools,
+        max_tokens: 8192,
+        max_iterations: 40,
+    };
+
+    let emit_ref = &emit;
+    let run_result = agent_loop::run(
+        provider.as_ref(),
+        &loop_config,
+        user_msg,
+        &tauri_executor,
+        |ev| match ev {
+            agent_loop::LoopEvent::Delta(text) => emit_ref(StepStreamPayload::Delta { text }),
+            agent_loop::LoopEvent::ToolUse { name } => emit_ref(StepStreamPayload::ToolUse { name }),
+            agent_loop::LoopEvent::ToolFinished { .. } => {}
+            agent_loop::LoopEvent::Usage { .. } => {}
+        },
+    )
+    .await;
+
+    let final_text = match run_result {
+        Ok((text, _transcript)) => text,
+        Err(agent_loop::LoopError::StreamInterrupted) => {
+            emit(StepStreamPayload::Error {
+                message: "stream interrupted — artifact NOT written to avoid truncation".into(),
+            });
+            return Ok(());
+        }
+        Err(e) => {
+            emit(StepStreamPayload::Error {
+                message: e.to_string(),
+            });
+            return Ok(());
+        }
+    };
 
     // Write primary artifact through the sanitization boundary.
     if let Some(rel) = StepRunner::primary_artifact(step) {
