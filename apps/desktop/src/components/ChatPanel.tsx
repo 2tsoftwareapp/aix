@@ -62,6 +62,16 @@ export function ChatPanel({
   const [model, setModel] = useState("claude-sonnet-4-5");
   const [approvalMode, setApprovalMode] = useState("ask");
   const [providerHasKey, setProviderHasKey] = useState(false);
+  const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!projectRoot) return;
+    invoke<{ allowed: boolean; needs_confirmation: boolean; reason: string | null }>("check_gate", {
+      step,
+      projectRoot,
+      featureSlug,
+    }).then(setGate).catch(() => setGate(null));
+  }, [step, projectRoot, featureSlug, running]);
 
   useEffect(() => {
     invoke<boolean>("has_provider_key", { providerId }).then(setProviderHasKey);
@@ -148,7 +158,7 @@ export function ChatPanel({
   };
 
   const run = async () => {
-    if (!projectRoot || !input.trim()) return;
+    if (!projectRoot || !input.trim() || (gate && !gate.allowed)) return;
     setRunning(true);
     setMessages((prev) => [...prev, { role: "user", text: input }]);
     const userInput = input;
@@ -223,6 +233,16 @@ export function ChatPanel({
         </div>
       </header>
 
+      {gate && !gate.allowed && (
+        <div className="border-b border-red-400/30 bg-red-400/5 px-5 py-2 text-xs text-red-300">
+          ⛔ {step} is blocked: {gate.reason}
+        </div>
+      )}
+      {gate?.allowed && gate.needs_confirmation && (
+        <div className="border-b border-yellow-400/30 bg-yellow-400/5 px-5 py-2 text-xs text-yellow-200/90">
+          ⚠ {gate.reason}
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto px-5 py-6">
         <div className="mx-auto max-w-2xl space-y-4">
           {messages.length === 0 && (
@@ -317,7 +337,7 @@ export function ChatPanel({
               ) : (
                 <button
                   onClick={run}
-                  disabled={!ready || !input.trim()}
+                  disabled={!ready || !input.trim() || (gate ? !gate.allowed : false)}
                   className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
                 >
                   Run

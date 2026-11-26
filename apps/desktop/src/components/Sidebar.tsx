@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { PipelineState, StepId } from "../types";
 
 const STEPS: { id: StepId; label: string; gate?: boolean }[] = [
@@ -12,6 +13,39 @@ const STEPS: { id: StepId; label: string; gate?: boolean }[] = [
   { id: "implement", label: "Implement" },
   { id: "converge", label: "Converge" },
 ];
+
+function stepStatus(
+  step: StepId,
+  pipeline: PipelineState | null,
+  activeFeature: string | null,
+): "done" | "partial" | "none" {
+  if (!pipeline) return "none";
+  const f = pipeline.features.find((x) => x.slug === activeFeature) ?? pipeline.features[pipeline.features.length - 1];
+  switch (step) {
+    case "constitution":
+      return pipeline.has_constitution ? "done" : "none";
+    case "specify":
+    case "clarify":
+      return f?.artifacts.spec ? "done" : "none";
+    case "plan":
+      return f?.artifacts.plan ? "done" : "none";
+    case "checklist":
+      if (!f || f.artifacts.checklists.length === 0) return "none";
+      return f.artifacts.checklists.every((c) => c.total > 0 && c.checked === c.total) ? "done" : "partial";
+    case "tasks":
+      return f?.artifacts.tasks ? "done" : "none";
+    case "analyze":
+      return "none"; // read-only, leaves no artifact
+    case "implement": {
+      if (!f) return "none";
+      const [total, done] = f.artifacts.task_progress;
+      if (total === 0) return "none";
+      return done >= total ? "done" : done > 0 ? "partial" : "none";
+    }
+    case "converge":
+      return "none"; // verdict parsing lands with M5
+  }
+}
 
 export function Sidebar({
   activeStep,
@@ -43,15 +77,26 @@ export function Sidebar({
       </div>
 
       <div className="px-3 py-2 text-xs uppercase tracking-wide text-ink-faint">Project</div>
-      {projectRoot && !editing ? (
-        <button
-          onClick={() => setEditing(true)}
-          className="mx-2 mb-2 truncate rounded-md border border-edge px-3 py-2 text-left text-xs text-ink-dim hover:border-accent"
-          title={projectRoot}
-        >
+      <button
+        onClick={async () => {
+          try {
+            const dir = await open({ directory: true, title: "Open project" });
+            if (typeof dir === "string") onOpenProject(dir);
+          } catch {
+            // dialog unavailable (e.g. browser dev) — fall back to typing below
+            setEditing(true);
+          }
+        }}
+        className="mx-2 mb-1 rounded-md border border-accent/50 px-3 py-1.5 text-xs text-accent hover:bg-accent/10"
+      >
+        Open project…
+      </button>
+      {projectRoot && (
+        <p className="mx-2 mb-2 truncate px-1 text-[10px] font-mono text-ink-faint" title={projectRoot}>
           {projectRoot}
-        </button>
-      ) : (
+        </p>
+      )}
+      {editing && (
         <form
           className="mx-2 mb-2"
           onSubmit={(e) => {
@@ -108,14 +153,40 @@ export function Sidebar({
                   : "text-ink-dim hover:bg-surface-overlay/60 hover:text-ink"
               }`}
             >
-              <span
-                className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] ${
-                  active ? "border-accent text-accent" : "border-edge text-ink-faint"
-                }`}
-              >
-                {i + 1}
-              </span>
+              {(() => {
+                const st = stepStatus(step.id, pipeline, activeFeature);
+                if (st === "done") {
+                  return (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent/20 text-[10px] text-accent">
+                      ✓
+                    </span>
+                  );
+                }
+                if (st === "partial") {
+                  return (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full border border-accent/60 text-[10px] text-accent">
+                      ◐
+                    </span>
+                  );
+                }
+                return (
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] ${
+                      active ? "border-accent text-accent" : "border-edge text-ink-faint"
+                    }`}
+                  >
+                    {i + 1}
+                  </span>
+                );
+              })()}
               <span className="flex-1">{step.label}</span>
+              {step.id === "implement" && (() => {
+                const f = pipeline?.features.find((x) => x.slug === activeFeature);
+                const [total, done] = f?.artifacts.task_progress ?? [0, 0];
+                return total > 0 ? (
+                  <span className="font-mono text-[10px] text-ink-faint">{done}/{total}</span>
+                ) : null;
+              })()}
               {step.gate && <span className="text-[10px] text-ink-faint">gate</span>}
             </button>
           );

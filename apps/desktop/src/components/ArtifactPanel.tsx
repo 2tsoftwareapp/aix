@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Markdown from "react-markdown";
 import type { StepId } from "../types";
 
 const ARTIFACT_FOR_STEP: Partial<Record<StepId, string>> = {
@@ -36,6 +37,7 @@ export function ArtifactPanel({
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     const forStep = ARTIFACT_FOR_STEP[step];
@@ -99,7 +101,15 @@ export function ArtifactPanel({
         {featureSlug && (
           <span className="truncate max-w-32 font-mono text-[10px] text-ink-faint">{featureSlug}</span>
         )}
-        {dirty && (
+        {content !== null && !rel?.includes("checklists/") && (
+          <button
+            onClick={() => setEditing((v) => !v)}
+            className="rounded border border-edge px-2 py-1 text-xs text-ink-dim hover:text-ink"
+          >
+            {editing ? "Preview" : "Edit"}
+          </button>
+        )}
+        {dirty && editing && (
           <button
             onClick={save}
             disabled={saving}
@@ -163,7 +173,7 @@ export function ArtifactPanel({
               </button>
             </div>
           </div>
-        ) : content !== null ? (
+        ) : content !== null && editing ? (
           <textarea
             value={content}
             onChange={(e) => {
@@ -173,6 +183,10 @@ export function ArtifactPanel({
             spellCheck={false}
             className="flex-1 resize-none bg-transparent px-4 py-3 font-mono text-xs leading-relaxed text-ink-dim outline-none"
           />
+        ) : content !== null ? (
+          <div className="flex-1 overflow-y-auto px-4 py-3 artifact-markdown">
+            <Markdown>{content}</Markdown>
+          </div>
         ) : (
           <div className="px-4 py-4 text-xs text-ink-faint">
             {error?.includes("no such file") || error?.includes("No such file") || error?.includes("no feature") ? (
