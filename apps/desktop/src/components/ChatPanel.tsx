@@ -142,28 +142,32 @@ export function ChatPanel({
   const [providerHasKey, setProviderHasKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
   const [gate, setGate] = useState<{ allowed: boolean; needs_confirmation: boolean; reason: string | null } | null>(null);
-  const [openrouterModels, setOpenrouterModels] = useState<string[]>([]);
+  const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
 
-  // Live OpenRouter catalog: the /models endpoint is public, so the combobox
-  // can offer current models instead of the aging hardcoded list. Cached 24h.
+  // Live model catalogs: every provider's API exposes a model list, so the
+  // combobox reflects what the account can actually use instead of aging
+  // hardcoded entries. Cached per provider for 24h; static lists are the
+  // offline/no-key fallback.
   useEffect(() => {
-    if (providerId !== "openrouter") return;
-    const CACHE_KEY = "aix-openrouter-models";
+    if (!keyStatus[providerId] && providerId !== "openrouter") return;
+    if (liveModels[providerId]) return;
+    const CACHE_KEY = `aix-models-${providerId}`;
     try {
       const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
-      if (cached && Date.now() - cached.at < 24 * 3600 * 1000) {
-        setOpenrouterModels(cached.ids);
+      if (cached && Date.now() - cached.at < 24 * 3600 * 1000 && cached.ids.length > 0) {
+        setLiveModels((m) => ({ ...m, [providerId]: cached.ids }));
         return;
       }
     } catch { /* fall through to fetch */ }
-    invoke<{ id: string }[]>("list_openrouter_models")
+    invoke<{ id: string }[]>("list_models", { providerId })
       .then((models) => {
+        if (models.length === 0) return;
         const ids = models.map((m) => m.id);
-        setOpenrouterModels(ids);
+        setLiveModels((m) => ({ ...m, [providerId]: ids }));
         localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
       })
       .catch(() => { /* static fallback list remains */ });
-  }, [providerId]);
+  }, [providerId, keyStatus]);
 
   useEffect(() => {
     if (!projectRoot) return;
@@ -331,9 +335,9 @@ export function ChatPanel({
             value={model}
             onChange={setModel}
             options={
-              providerId === "openrouter" && openrouterModels.length > 0
-                ? [...MODEL_OPTIONS.openrouter.filter((m) => openrouterModels.includes(m)),
-                   ...openrouterModels.filter((m) => !MODEL_OPTIONS.openrouter.includes(m))]
+              liveModels[providerId]?.length
+                ? [...MODEL_OPTIONS[providerId].filter((m) => liveModels[providerId].includes(m)),
+                   ...liveModels[providerId].filter((m) => !MODEL_OPTIONS[providerId].includes(m))]
                 : MODEL_OPTIONS[providerId]
             }
             className="w-[200px]"

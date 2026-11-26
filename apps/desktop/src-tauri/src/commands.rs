@@ -702,9 +702,9 @@ fn uuid_simple() -> String {
 }
 
 #[tauri::command]
-pub async fn list_openrouter_models() -> Result<Vec<providers::models::ModelInfo>, String> {
+pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::ModelInfo>, String> {
     let client = reqwest::Client::new();
-    providers::models::fetch_openrouter_models(&client)
+    providers::models::fetch_models(&provider_id, &client)
         .await
         .map_err(|e| e.to_string())
 }

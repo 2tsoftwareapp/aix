@@ -1,7 +1,7 @@
 mod commands;
 
 use commands::{
-    list_openrouter_models,
+    list_models,
     cancel_run, check_gate, flip_checklist_item, has_provider_key, read_artifact, respond_approval,
     run_step, scan_pipeline, store_provider_key, write_artifact, ApprovalRegistry, RunCancellation,
 };
@@ -37,7 +37,7 @@ pub fn run() {
             write_artifact,
             flip_checklist_item,
             template_count,
-            list_openrouter_models,
+            list_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running aix desktop");
