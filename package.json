@@ -1,23 +1,17 @@
 {
-  "name": "aix-monorepo",
+  "name": "aix",
   "private": true,
   "version": "0.1.0",
-  "description": "aix \u2014 AI Engineering Platform (TypeScript monorepo)",
+  "description": "aix \u2014 speckit-native AI desktop app (Tauri)",
   "type": "module",
   "scripts": {
-    "build": "turbo run build",
-    "lint": "eslint . && turbo run lint",
-    "test": "turbo run test",
-    "check": "turbo run check",
-    "clean": "turbo run clean",
-    "doctor": "node packages/cli/dist/index.js doctor",
-    "desktop": "pnpm --filter @x/desktop start",
-    "desktop:build": "pnpm --filter @x/desktop build"
+    "dev": "pnpm --filter @aix/desktop tauri dev",
+    "build": "pnpm --filter @aix/desktop build",
+    "lint": "eslint .",
+    "test": "pnpm --filter @aix/desktop test:ui-conventions && pnpm --filter @aix/desktop test:regression",
+    "desktop:build": "pnpm --filter @aix/desktop tauri build"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsup": "^8.0.0",
-    "turbo": "^2.0.0",
     "typescript": "^5.6.0",
     "eslint": "^9",
     "eslint-plugin-react-hooks": "^5",
@@ -26,11 +20,5 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "packageManager": "pnpm@9.15.0",
-  "dependencies": {
-    "@astryxdesign/cli": "^0.7.17",
-    "@astryxdesign/core": "^0.7.17",
-    "@astryxdesign/theme-neutral": "^0.7.17",
-    "@stylexjs/stylex": "^0.19.2"
-  }
+  "packageManager": "pnpm@9.15.0"
 }

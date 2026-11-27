@@ -1,6 +1,5 @@
 node_modules/
 dist/
-.turbo/
 *.tsbuildinfo
 coverage/
 release/
@@ -9,7 +8,6 @@ build/
 # aix local state — runtime output (.aix/runtime: memory, context index, generated
 # code, checkpoints) + static inputs (.aix/static: config, eval suites). All machine-local.
 .aix/
-# generated skill index — contains machine-absolute paths; regenerate via `aix skills`
 catalog.json
 
 # env

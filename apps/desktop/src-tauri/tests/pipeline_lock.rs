@@ -14,11 +14,11 @@ fn template_root() -> PathBuf {
         return p.into();
     }
     // tests run with cwd = crate root (src-tauri)
-    let rel = PathBuf::from("../../../content/speckit");
+    let rel = PathBuf::from("../speckit-templates");
     if rel.is_dir() {
         return rel;
     }
-    PathBuf::from("content/speckit")
+    PathBuf::from("speckit-templates")
 }
 
 fn store() -> TemplateStore {

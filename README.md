@@ -1,133 +1,57 @@
 # aix
 
-> AI engineering methodology + 160 canonical skills across 9 categories, delivered as a Claude Code and Codex plugin — plus a speckit-native desktop app.
+A speckit-native AI desktop app built with Tauri (Rust + React).
 
-**The host agent is the runtime**. aix is the playbook and the skill library — not a separate engine you invoke.
+aix turns the [spec-kit](https://github.com/github/spec-kit) methodology into a
+desktop workflow: open a project, run the specify → clarify → plan → tasks →
+implement pipeline with an AI agent, with human approval gates at every step.
 
-## Products in this repo
+## Features
 
-| Surface | Path | What it is |
-|---------|------|------------|
-| Skills plugin | `skills/`, `hooks/`, `.claude-plugin/`, `.codex-plugin/` | Methodology spine + domain skill library for Claude Code / Codex |
-| Desktop app | `apps/desktop` | Speckit-native Tauri desktop app (Rust backend + React/Astryx UI) — pipeline execution, approvals, artifact editing |
-| Authoring toolchain | `packages/*` | TypeScript packages for validating, compiling, and installing skills to providers |
+- **Speckit pipeline** — constitution, specify, clarify, plan, tasks, implement,
+  analyze, checklist as first-class steps with artifact-driven handoff
+- **Multi-provider** — Anthropic, OpenAI, Gemini, OpenRouter and other
+  OpenAI-compatible endpoints; custom model IDs supported
+- **Approval gates** — ask / auto-edit / full-auto modes; destructive actions
+  always require confirmation
+- **Per-context workspaces** — drafts, transcripts and approvals are isolated
+  per project + feature + step
+- **Artifact editor** — read and edit spec artifacts in-app with draft safety
 
-## How the plugin works
+## Architecture
+
+```
+apps/desktop/
+  src/            React + Astryx design system UI
+  src-tauri/      Rust backend
+    crates/
+      speckit-core   pipeline steps, gates, runner state
+      agent-loop     agent execution loop
+      executor       tool execution with approval enforcement
+      providers      LLM provider clients
+      app-state      persisted app state
+  speckit-templates/  vendored, SHA256-verified spec-kit templates
+```
+
+The backend logic is implemented in Rust crates; the app has no runtime
+dependency on the original spec-kit CLI — only the template format is vendored
+and hash-pinned.
+
+## Development
+
+Requires Node 22+, pnpm 9, Rust stable, and Tauri system dependencies.
 
 ```bash
-git clone https://github.com/truongnat/aix
+pnpm install
+pnpm dev            # run the desktop app in dev mode
+pnpm build          # typecheck + production web build
+pnpm test           # ui-conventions + regression checks
+pnpm lint           # eslint
+pnpm desktop:build  # produce platform bundle
+(cd apps/desktop/src-tauri && cargo test --workspace)
 ```
-
-Claude Code:
-
-```text
-/plugin install /path/to/aix
-```
-
-Codex:
-
-```bash
-codex plugin marketplace add truongnat/aix
-codex plugin add aix@aix
-```
-
-On start, a `SessionStart` hook injects [`using-aix`](./skills/methodology/using-aix/SKILL.md) into context. It explains the 8-step engineering spine and how to reach the canonical skills via the host's `Skill` tool.
-
-No engine, no runtime — just skills the agent pulls in when needed.
-
-## The engineering spine
-
-| # | Phase | Skill |
-|---|-------|-------|
-| 1 | Align & Shape | `discussing-pro` |
-| 2 | Plan | `planning-pro` |
-| 3 | Isolate | `git-worktree-pro` |
-| 4 | Test-first | `ttd-pro` |
-| 5 | Execute | `executing-pro` |
-| 6 | Review | `code-review-pro` |
-| 7 | Verify | `verify-pro` |
-| 8 | Remember | `remember-pro` |
-
-## Desktop app
-
-`apps/desktop` is a Tauri 2 application implementing the speckit pipeline natively in Rust:
-project scanning, gate engine, provider streaming (Anthropic, OpenAI, Qwen, OpenRouter),
-tool-use loop with approval gating, cancellation, audit logging, and artifact management.
-Its frontend is React + Astryx. It does not depend on the TypeScript packages.
-
-```bash
-pnpm --filter @aix/desktop build     # web bundle typecheck + build
-cd apps/desktop/src-tauri && cargo test --workspace
-```
-
-Speckit templates are vendored under `content/speckit/` and SHA256-verified at load.
-
-## Authoring toolchain
-
-6 packages for authoring, validating, compiling, and installing skills:
-
-| Package | Role |
-|---------|------|
-| `@x/registry` | SKILL.md schema (Zod), loader, catalog |
-| `@x/policy` | Secret/PII redaction, shell denylist |
-| `@x/providers` | Compile-time provider adapters (Claude, Cursor, Codex, Gemini) |
-| `@x/compiler` | Idempotent file emitter |
-| `@x/cli` | Command surface (`install`, `skills`, `doctor`) |
-| `@x/core` | Types, phase machine, guards |
-
-## Quick start
-
-```bash
-pnpm install --frozen-lockfile --ignore-scripts
-pnpm build
-pnpm test
-```
-
-## CLI
-
-```bash
-aix install --all
-aix install --provider cursor
-aix skills validate [--content-root <content-directory>]
-aix skills list
-aix skills show <name>
-aix doctor
-```
-
-The workspace packages are private; build locally and use `node packages/cli/dist/index.js`
-in place of `aix` unless the executable is installed locally.
-
-`skills/` is the canonical authoring source containing 160 skills organized in 9 categories.
-`aix skills list` regenerates the local catalog from canonical content;
-validation includes invalid YAML/frontmatter and duplicate identifiers.
-
-## Repository
-
-```
-.agents/plugins/  Codex marketplace entry for this repo
-.claude-plugin/   Claude Code plugin manifest
-.codex-plugin/    Codex plugin manifest
-hooks/            SessionStart → injects using-aix
-skills/           Canonical domain, process, and reference skills in 9 categories
-content/
-  rules/          Spine guardrail rules
-  workflows/      Engineering spine flow
-  speckit/        Vendored speckit templates/extensions for the desktop app
-packages/         6 @x/* TypeScript authoring packages
-apps/
-  desktop/        Speckit-native Tauri desktop app
-  docs/           Documentation site
-docs/history/     Completed migration/assessment archives
-```
-
-## Security
-
-- Sensitive session prose and memory content are redacted before persistence in the
-  authoring toolchain. Secret-bearing identifiers/paths are rejected instead of silently rewritten.
-- The desktop app stores provider credentials in an XDG config JSON file (0600 on unix)
-  with env-var fallback, and gates mutating tool calls behind explicit user approval.
-- A shell denylist is not a substitute for an OS security sandbox.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Vendored spec-kit templates retain their own
+upstream license (`apps/desktop/speckit-templates/UPSTREAM-LICENSE`).

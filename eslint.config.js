@@ -11,8 +11,6 @@ export default tseslint.config(
       
       
       '**/test/fixtures/**',
-      'skills/**',
-      'content/**',
       '**/*.mjs',
       '**/*.cjs',
     ],

@@ -103,12 +103,12 @@ mod tests {
     use super::*;
 
     fn vendored_root() -> PathBuf {
-        // content/speckit at repo root: crates/speckit-core -> desktop -> apps -> repo
+        // speckit-templates inside the desktop app: crates/speckit-core -> src-tauri -> desktop
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        for _ in 0..5 {
+        for _ in 0..3 {
             p.pop();
         }
-        p.join("content/speckit")
+        p.join("speckit-templates")
     }
 
     #[test]

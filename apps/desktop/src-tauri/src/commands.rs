@@ -166,13 +166,13 @@ fn template_root() -> PathBuf {
     if let Ok(p) = std::env::var("AIX_SPECKIT_CONTENT") {
         return p.into();
     }
-    // dev fallback: repo content/speckit relative to src-tauri
-    let dev = PathBuf::from("../../../content/speckit");
+    // dev fallback: speckit-templates bundled inside the desktop app
+    let dev = PathBuf::from("../speckit-templates");
     if dev.is_dir() {
         return dev;
     }
     // absolute fallback for running from repo root
-    PathBuf::from("content/speckit")
+    PathBuf::from("speckit-templates")
 }
 
 fn parse_step(s: &str) -> Result<Step, String> {

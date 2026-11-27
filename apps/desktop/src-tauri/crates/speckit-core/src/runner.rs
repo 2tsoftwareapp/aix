@@ -223,10 +223,10 @@ mod golden_tests {
 
     fn store() -> TemplateStore {
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        for _ in 0..5 {
+        for _ in 0..3 {
             p.pop();
         }
-        TemplateStore::load_verified(p.join("content/speckit")).unwrap()
+        TemplateStore::load_verified(p.join("speckit-templates")).unwrap()
     }
 
     #[test]
