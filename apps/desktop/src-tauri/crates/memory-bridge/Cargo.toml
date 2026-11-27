@@ -1,0 +1,18 @@
+[package]
+name = "memory-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ai-memory-store = { git = "https://github.com/akitaonrails/ai-memory", rev = "d59ea5d1048560f0f3d52c3bd11dfdf4b3e26d85" }
+ai-memory-core = { git = "https://github.com/akitaonrails/ai-memory", rev = "d59ea5d1048560f0f3d52c3bd11dfdf4b3e26d85" }
+ai-memory-wiki = { git = "https://github.com/akitaonrails/ai-memory", rev = "d59ea5d1048560f0f3d52c3bd11dfdf4b3e26d85" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# force refinery-core past the rusqlite<=0.40 cap of 0.10.0 so the graph
+# unifies on a single libsqlite3-sys (links uniqueness)
+refinery-core = "=0.10.1"
+
+[dev-dependencies]
+tempfile = "3"
