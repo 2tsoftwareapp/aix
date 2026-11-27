@@ -13,3 +13,60 @@
 .astryx-chat-composer-input > div[aria-hidden="true"] {
   padding-inline: 0;
 }
+
+/* --- Motion: step transitions, menus, panels --- */
+@keyframes aix-fade-slide-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes aix-menu-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.aix-step-content {
+  animation: aix-fade-slide-in 180ms ease-out;
+}
+
+.aix-menu-pop {
+  animation: aix-menu-pop-in 140ms ease-out;
+  transform-origin: top left;
+}
+
+.aix-artifact-panel {
+  transition: width 180ms ease-out;
+}
+
+/* Starter prompt buttons: consistent hover transition */
+.aix-starter-prompt {
+  transition: border-color 140ms ease-out, color 140ms ease-out, background-color 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aix-step-content,
+  .aix-menu-pop {
+    animation: none;
+  }
+  .aix-artifact-panel {
+    transition: none;
+  }
+  .aix-starter-prompt {
+    transition: none;
+  }
+}
+
+@keyframes aix-slide-in-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: none; }
+}
+
+.aix-artifact-overlay {
+  animation: aix-slide-in-right 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aix-artifact-overlay {
+    animation: none;
+  }
+}

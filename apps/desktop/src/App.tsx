@@ -33,6 +33,15 @@ export function App() {
     autoSaveId: "aix-artifact-panel",
   });
   const [artifactCollapsed, setArtifactCollapsed] = useState(() => localStorage.getItem("aix-artifact-collapsed") === "1");
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // Below this width the artifact panel would squeeze the chat under a usable
+  // size, so it floats over the content instead of taking layout space.
+  const artifactOverlay = windowWidth < 1150;
   const toggleArtifact = () => {
     setArtifactCollapsed((prev) => {
       localStorage.setItem("aix-artifact-collapsed", prev ? "0" : "1");
@@ -125,7 +134,7 @@ export function App() {
           />
         }
       >
-        <HStack height="100%" width="100%" gap={0}>
+        <HStack height="100%" width="100%" gap={0} style={{ position: "relative" }}>
           <StackItem size="fill">
             <ChatPanel
               step={activeStep}
@@ -138,7 +147,7 @@ export function App() {
               onOpenSetup={() => setShowSetup(true)}
             />
           </StackItem>
-          {!artifactCollapsed && (
+          {!artifactCollapsed && !artifactOverlay && (
             <ResizeHandle
               direction="horizontal"
               resizable={artifactResize.props}
@@ -158,8 +167,30 @@ export function App() {
                 />
               </VStack>
             </StackItem>
+          ) : artifactOverlay ? (
+            <div
+              className="aix-artifact-overlay"
+              style={{
+                position: "absolute", top: 0, right: 0, bottom: 0, zIndex: 20,
+                width: Math.min(artifactResize.size, Math.max(320, windowWidth - 240)),
+                background: "var(--color-background-popover, #1c1c1e)",
+                borderLeft: "1px solid var(--color-border)",
+                boxShadow: "-12px 0 32px rgba(0,0,0,0.35)",
+              }}
+            >
+              <Card variant="transparent" padding={0} width="100%" height="100%">
+                <ArtifactPanel
+                  step={activeStep}
+                  projectRoot={projectRoot}
+                  featureSlug={activeFeature}
+                  refreshToken={refreshToken}
+                  checklists={activeChecklists}
+                  onCollapse={toggleArtifact}
+                />
+              </Card>
+            </div>
           ) : (
-            <StackItem size="static" style={{ width: artifactResize.size }}>
+            <StackItem size="static" className="aix-artifact-panel" style={{ width: artifactResize.size }}>
               <Card variant="transparent" padding={0} width="100%" height="100%">
                 <ArtifactPanel
                   step={activeStep}

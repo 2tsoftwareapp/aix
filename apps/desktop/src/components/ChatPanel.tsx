@@ -310,6 +310,7 @@ function ReadyState({
             <button
               key={prompt}
               type="button"
+              className="aix-starter-prompt"
               onClick={() => onUsePrompt(prompt)}
               style={{
                 display: "block",
@@ -384,18 +385,20 @@ function StepNavigator({
   const chipStyle: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 6,
     padding: "5px 10px", borderRadius: 8, cursor: "pointer",
-    background: "var(--color-surface-elevated, rgba(255,255,255,0.06))",
+    background: "var(--color-background-muted, rgba(255,255,255,0.06))",
     border: "1px solid var(--color-border)",
     color: "inherit", font: "inherit", outline: "none",
   };
 
   return (
-    <div ref={ref} style={{ position: "absolute", top: 56, right: 12, zIndex: 30 }}>
-      {open ? (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
+      {open && (
         <div
+          className="aix-menu-pop"
           style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30,
             width: 232, borderRadius: 12, overflow: "hidden",
-            background: "var(--color-surface-elevated, #1c1c1e)",
+            background: "var(--color-background-popover, #1c1c1e)",
             border: "1px solid var(--color-border)",
             boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
           }}
@@ -473,14 +476,20 @@ function StepNavigator({
             );
           })}
         </div>
-      ) : (
-        <button type="button" style={chipStyle} onClick={() => setOpen(true)} aria-label="Open pipeline steps" aria-haspopup="menu">
-          <Icon icon={STEP_ICONS[step]} size="xsm" color="accent" />
-          <Text type="supporting" weight="medium">{STEPS[stepIndex]?.label ?? step}</Text>
-          <Text type="code" size="2xs" color="secondary">{stepIndex + 1}/9</Text>
-          <Icon icon={ChevronDown} size="xsm" color="secondary" />
-        </button>
       )}
+      <button
+        type="button"
+        style={{ ...chipStyle, background: open ? "var(--color-background-muted, rgba(255,255,255,0.06))" : "transparent" }}
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Open pipeline steps"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Icon icon={STEP_ICONS[step]} size="xsm" color="accent" />
+        <Text type="supporting" weight="medium">{STEPS[stepIndex]?.label ?? step}</Text>
+        <Text type="code" size="2xs" color="secondary">{stepIndex + 1}/9</Text>
+        <Icon icon={ChevronDown} size="xsm" color="secondary" />
+      </button>
     </div>
   );
 }
@@ -844,11 +853,16 @@ export function ChatPanel({
       <VStack gap={0} width="100%" style={{ borderBottom: "1px solid var(--color-border)" }}>
         <HStack padding={3} vAlign="center" gap={3} width="100%">
           <HStack gap={2} vAlign="center" style={{ minWidth: 0 }}>
-            <Icon icon={STEP_ICONS[step]} size="sm" color="accent" />
-            <Text type="supporting" weight="medium" maxLines={1}>{featureSlug ?? step}</Text>
-            {featureSlug && <Text type="supporting" color="secondary" maxLines={1}>·</Text>}
-            {featureSlug && <Text type="supporting" color="secondary" maxLines={1}>{step}</Text>}
-            <Text type="code" size="2xs" color="secondary">{stepIndex + 1}/9</Text>
+            <StepNavigator
+              step={step}
+              pipeline={pipeline}
+              projectRoot={projectRoot}
+              featureSlug={featureSlug}
+              workspaces={workspaces}
+              stepGates={stepGates}
+              onSelectStep={onSelectStep}
+            />
+            {featureSlug && <Text type="supporting" color="secondary" maxLines={1}>{featureSlug}</Text>}
           </HStack>
           <StackItem size="fill" style={{ minWidth: 0 }}>
             <Text type="supporting" color="secondary" maxLines={1}>{STEP_HINTS[step]}</Text>
@@ -856,6 +870,7 @@ export function ChatPanel({
           {featureSlug && <Badge variant="neutral" label={featureSlug} />}
         </HStack>
       </VStack>
+      <div key={step} className="aix-step-content" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <ChatLayout
         density="compact"
           emptyState={
@@ -995,15 +1010,7 @@ export function ChatPanel({
             </ChatMessageList>
           )}
         </ChatLayout>
-      <StepNavigator
-        step={step}
-        pipeline={pipeline}
-        projectRoot={projectRoot}
-        featureSlug={featureSlug}
-        workspaces={workspaces}
-        stepGates={stepGates}
-        onSelectStep={onSelectStep}
-      />
+      </div>
     </VStack>
   );
 }
