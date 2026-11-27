@@ -142,11 +142,15 @@ const commandsSource = readFileSync(new URL("../src-tauri/src/commands.rs", impo
 }
 
 const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
+const stepsLibSource = readFileSync(new URL("../src/lib/steps.ts", import.meta.url), "utf8");
 {
-  assert.match(sidebarSource, /stepWorkspaceMatches/, "sidebar finds run state at the originating workspace step");
+  assert.match(chatPanelSource, /stepWorkspaceMatches/, "step navigation finds run state at the originating workspace step");
   assert.match(sidebarSource, /approval pending/, "sidebar exposes pending approval indicators");
-  assert.match(sidebarSource, /blockedTarget/, "blocked pipeline steps expose prerequisite navigation");
-  assert.match(sidebarSource, /case "clarify":\s*return "none"/, "spec.md existing does not mark clarify as completed");
+  assert.match(chatPanelSource, /approval pending/, "step navigation exposes pending approval indicators at the originating step");
+  assert.match(chatPanelSource, /blockedTarget/, "blocked pipeline steps expose prerequisite navigation");
+  assert.match(chatPanelSource, /Go to \$\{target\}|aria-label=\{`Go to/, "prerequisite navigation jumps to the blocking step");
+  assert.doesNotMatch(chatPanelSource, /disabled=\{blocked\}/, "blocked steps stay navigable — the gate blocks runs, not viewing workspaces");
+  assert.match(stepsLibSource, /case "clarify":\s*return "none"/, "spec.md existing does not mark clarify as completed");
   assert.match(sidebarSource, /\/3 docs/, "feature rows distinguish artifact/document presence from run state");
 }
 
