@@ -53,7 +53,7 @@ the proven path, not optional decoration.
 
 ## Memory & Previous Lessons
 
-Before beginning non-trivial work, **search `.aix/runtime/memory/`** using standard file/grep tools (or `aix memory search "<query>"`). Prior sessions record durable lessons, constraints, and bug fixes here to prevent rediscovering known hazards.
+Before beginning non-trivial work, **search `.aix/runtime/memory/`** using standard file/grep tools. Prior sessions record durable lessons, constraints, and bug fixes here to prevent rediscovering known hazards.
 
 ## Session artifacts (where to write spine outputs)
 

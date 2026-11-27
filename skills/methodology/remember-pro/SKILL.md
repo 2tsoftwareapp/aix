@@ -51,7 +51,7 @@ Capture durable lessons, constraints, and decisions that will improve later sess
 5. If the work produced an approved delta spec, record that the durable spec layer should absorb it when enabled.
 6. Confirm the note would help a future session start faster.
 7. Save **`REMEMBER.md`** to `.aix/sessions/<session-id>/REMEMBER.md` (see [session artifacts contract](../../_shared/session-artifacts-contract.md)).
-8. Save a durable memory record to **`.aix/runtime/memory/<id>.md`** (or run `aix memory push "<title>" "<body>" --tags "<tags>"`) so subsequent sessions can search and reuse this lesson before starting new tasks.
+8. Save a durable memory record to **`.aix/runtime/memory/<id>.md`** so subsequent sessions can search and reuse this lesson before starting new tasks.
 
 ## Operating Principles
 
@@ -98,7 +98,7 @@ Output:
 This skill must produce:
 
 - **`REMEMBER.md`** under `.aix/sessions/<session-id>/` recording durable decisions, lessons, and hazards
-- A durable memory record in **`.aix/runtime/memory/<id>.md`** (or via `aix memory push "<title>" "<body>" --tags "<tags>"`) for future sessions to discover
+- A durable memory record in **`.aix/runtime/memory/<id>.md`** for future sessions to discover
 ## Common Failure Modes
 
 - saving transient execution chatter

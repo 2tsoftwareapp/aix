@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+- **TypeScript execution stack retired.** Removed `@x/engine`, `@x/evals`, `@x/hitl`, `@x/prompt`, `@x/context`, `@x/memory`, `@x/preview`, `services/kb-server`, `apps/todo-sync`, and the CLI execution commands (`run`, `verify`, `memory`, `kb`, `context`, `eval`). Pipeline execution now lives in the speckit-native Tauri desktop app; durable memory is plain Markdown in `.aix/runtime/memory/`.
+- `@x/providers` runtime LLM client and pricing estimation; the package now contains compile-time provider adapters only.
+- Stale `bun.lock` (pnpm is the pinned package manager) and processed review artifacts.
+
+### Changed
+- `kb-workflow`, `remember-pro`, `using-aix` skills no longer reference removed CLI commands; memory is managed as Markdown via native file tools. Compiled copies regenerated for codex/cursor.
+- README, PROJECT_OVERVIEW and docs site rewritten for the three-surface repo layout (skills plugin, desktop app, authoring toolchain); historical migration/assessment docs moved to `docs/history/`.
+
 ### Added
 - **kb-server auto-start/stop**. CLI runs ensure the service is available and only automatically stop instances started by the same CLI process; reused/shared services are left running.
 - **kb-server plugin integration**. Session hooks request optional background startup when the CLI is built. Context does not claim startup succeeded or instruct automatic shutdown of shared services.

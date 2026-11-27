@@ -3,38 +3,46 @@
 ## Mục tiêu và mô hình thực thi
 
 **Host agent là runtime.** aix cung cấp phương pháp kỹ thuật tám bước và thư viện skill;
-không yêu cầu engine headless để dùng plugin. Thư viện canonical hiện có **160 SKILL.md**
-được tổ chức theo 9 category trực tiếp trong [skills/](skills/).
+không có engine headless. Thư viện canonical hiện có **160 SKILL.md** được tổ chức theo
+9 category trực tiếp trong [skills/](skills/).
 
-```mermaid
-flowchart TD
-  Host[Host coding agent] --> Hook[SessionStart hook]
-  Hook --> Entry[using-aix]
-  Entry --> Library[Canonical skills và engineering spine]
-  Library --> Tools[Tools và subagent native của host]
-  CLI[CLI hỗ trợ] --> Compiler[Registry và provider compiler]
-  CLI --> Engine[Headless generation tùy chọn]
-  CLI --> Memory[Markdown hoặc KB adapter có xác thực]
-  Memory --> KB[NestJS và SQLite FTS5]
-```
+Repo gồm ba bề mặt sản phẩm:
+
+| Bề mặt | Đường dẫn | Vai trò |
+|---|---|---|
+| Skills plugin | [skills/](skills/), [hooks/](hooks/), [.claude-plugin/](.claude-plugin/), [.codex-plugin/](.codex-plugin/) | Spine phương pháp + thư viện skill cho Claude Code / Codex |
+| Desktop app | [apps/desktop/](apps/desktop/) | Ứng dụng Tauri speckit-native (backend Rust + UI React/Astryx) — pipeline execution, approvals, artifact editing |
+| Authoring toolchain | [packages/](packages/) | Validate, compile, install skills sang các provider |
 
 ## Cấu trúc
 
 | Khu vực | Vai trò |
 |---|---|
 | [.claude-plugin/](.claude-plugin/) và [.codex-plugin/](.codex-plugin/) | Manifest plugin |
-| [hooks/](hooks/) | Inject skill nhập môn; yêu cầu KB startup tùy chọn nếu CLI đã build |
+| [hooks/](hooks/) | Inject skill nhập môn qua SessionStart |
 | [skills/](skills/) | Nguồn canonical của 160 skills phân theo 9 category |
-| [content/](content/) | Nguồn canonical của rule và workflow |
-| [packages/](packages/) | 13 package TypeScript quản lý bằng pnpm/Turborepo |
-| [services/kb-server/](services/kb-server/) | NestJS, SQLite/FTS5, cache trong process |
+| [content/](content/) | Rule, workflow, và speckit templates vendored cho desktop |
+| [packages/](packages/) | 6 package TypeScript authoring quản lý bằng pnpm/Turborepo |
+| [apps/desktop/](apps/desktop/) | Sản phẩm chính — Tauri desktop app |
 | [apps/docs/](apps/docs/) | Tài liệu VitePress |
-| [apps/todo-sync/](apps/todo-sync/) | Demo WebSocket riêng |
+| [docs/history/](docs/history/) | Archive migration/assessment đã hoàn thành |
 
-Các package nền tảng: `@x/core` (type/phase/budget), `@x/registry` (schema/catalog),
-`@x/policy` (redaction/denylist), `@x/providers` (adapter và API client), `@x/compiler`
-(emitter), `@x/context`, `@x/memory`, `@x/prompt`, `@x/engine`, `@x/evals`, `@x/hitl`,
-`@x/preview` và `@x/cli`. Chi tiết tại [Architecture](apps/docs/guide/architecture.md).
+Các package authoring: `@x/core` (type/phase/budget), `@x/registry` (schema/catalog),
+`@x/policy` (redaction/denylist), `@x/providers` (compile-time adapters), `@x/compiler`
+(emitter) và `@x/cli` (install/skills/doctor). Chi tiết tại [Architecture](apps/docs/guide/architecture.md).
+
+## Desktop app
+
+`apps/desktop` implement speckit pipeline native bằng Rust (`src-tauri/crates`): gate engine,
+provider streaming (Anthropic, OpenAI, Qwen, OpenRouter), tool-use loop có approval gating,
+cancellation, audit logging, artifact management. Frontend React + Astryx. App không phụ
+thuộc package TypeScript nào; speckit templates lấy từ `content/speckit/` và được verify
+SHA256 khi load.
+
+```bash
+pnpm --filter @aix/desktop build
+cd apps/desktop/src-tauri && cargo test --workspace
+```
 
 ## Engineering spine của host
 
@@ -47,32 +55,14 @@ Các package nền tảng: `@x/core` (type/phase/budget), `@x/registry` (schema/
 7. Verify — `verify-pro`.
 8. Remember — `remember-pro`.
 
-Đây là workflow hướng dẫn host agent; không đồng nhất với phase machine của engine.
-Artifact của một phiên nằm trong `.aix/sessions/<session-id>/`.
+Đây là workflow hướng dẫn host agent. Artifact của một phiên nằm trong `.aix/sessions/<session-id>/`.
 
-## Generation khác verification
+## Memory và an toàn dữ liệu
 
-```bash
-pnpm install --frozen-lockfile --ignore-scripts
-pnpm build
-node packages/cli/dist/index.js run "<task>" --auto
-node packages/cli/dist/index.js verify <session-id> --command "<lệnh kiểm chứng của bạn>"
-```
+Memory là plain Markdown trong `.aix/runtime/memory/` — host agent đọc/ghi trực tiếp bằng
+file tool, không cần service nào. Xem skill `kb-workflow` cho format canonical.
 
-Engine sinh file trong `generated/`, không ghi đè source dự án. Điểm review chỉ là heuristic
-về văn bản, không chứng minh tính đúng. Mọi task pending được xử lý trong giới hạn budget và
-approval; trạng thái generation `done` không có nghĩa test pass. Lệnh verify chạy command do
-người dùng chỉ định trong sandbox output, lưu exit code/output đã redact và hash file.
-Không có lệnh ship/deploy hay khẳng định shipping giả lập.
-
-## Knowledge base và an toàn dữ liệu
-
-Service hiện dùng SQLite/FTS5 và cache in-memory; không cần Neo4j/Meilisearch/Redis.
-Route memory yêu cầu API key hoặc master password; shutdown chỉ chấp nhận master password.
-Listener standalone mặc định loopback. CLI tạo credential quản trị ngẫu nhiên, lưu riêng tư,
-và chỉ tự dừng service do chính process đó khởi động.
-
-Metadata/session/checkpoint và memory được redact trước khi ghi. Generated source có secret
-nhận diện được sẽ bị từ chối thay vì bị sửa âm thầm. Redaction dựa trên pattern, không thay
-thế việc tránh đưa secret thật vào prompt. Hướng dẫn vận hành tại
-[KB Server](apps/docs/guide/kb-server.md) và [CLI Reference](apps/docs/reference/cli.md).
+Trong authoring toolchain, nội dung nhạy cảm được redact trước khi ghi; source có secret
+nhận diện được bị từ chối thay vì bị sửa âm thầm. Desktop app lưu provider credential trong
+XDG config JSON (0600 trên unix), env var làm fallback, và gate mọi tool mutation qua
+approval của người dùng. Tham chiếu [CLI Reference](apps/docs/reference/cli.md).
