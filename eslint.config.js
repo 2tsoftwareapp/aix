@@ -8,8 +8,8 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/.aix/**',
       '**/coverage/**',
-      'apps/docs/.vitepress/cache/**',
-      'apps/docs/.vitepress/dist/**',
+      
+      
       '**/test/fixtures/**',
       'skills/**',
       'content/**',

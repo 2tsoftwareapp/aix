@@ -24,12 +24,11 @@ Repo gồm ba bề mặt sản phẩm:
 | [content/](content/) | Rule, workflow, và speckit templates vendored cho desktop |
 | [packages/](packages/) | 6 package TypeScript authoring quản lý bằng pnpm/Turborepo |
 | [apps/desktop/](apps/desktop/) | Sản phẩm chính — Tauri desktop app |
-| [apps/docs/](apps/docs/) | Tài liệu VitePress |
 | [docs/history/](docs/history/) | Archive migration/assessment đã hoàn thành |
 
 Các package authoring: `@x/core` (type/phase/budget), `@x/registry` (schema/catalog),
 `@x/policy` (redaction/denylist), `@x/providers` (compile-time adapters), `@x/compiler`
-(emitter) và `@x/cli` (install/skills/doctor). Chi tiết tại [Architecture](apps/docs/guide/architecture.md).
+(emitter) và `@x/cli` (install/skills/doctor).
 
 ## Desktop app
 
@@ -65,4 +64,4 @@ file tool, không cần service nào. Xem skill `kb-workflow` cho format canonic
 Trong authoring toolchain, nội dung nhạy cảm được redact trước khi ghi; source có secret
 nhận diện được bị từ chối thay vì bị sửa âm thầm. Desktop app lưu provider credential trong
 XDG config JSON (0600 trên unix), env var làm fallback, và gate mọi tool mutation qua
-approval của người dùng. Tham chiếu [CLI Reference](apps/docs/reference/cli.md).
+approval của người dùng.

@@ -1,9 +1,0 @@
-.git
-.aix
-**/node_modules
-**/dist
-**/.turbo
-**/*.tsbuildinfo
-**/.env
-**/.env.*
-!**/.env.example
