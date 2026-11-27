@@ -1,10 +1,18 @@
 # aix
 
-> AI engineering methodology + 160 canonical skills across 9 categories, delivered as a Claude Code and Codex plugin.
+> AI engineering methodology + 160 canonical skills across 9 categories, delivered as a Claude Code and Codex plugin — plus a speckit-native desktop app.
 
 **The host agent is the runtime**. aix is the playbook and the skill library — not a separate engine you invoke.
 
-## How it works
+## Products in this repo
+
+| Surface | Path | What it is |
+|---------|------|------------|
+| Skills plugin | `skills/`, `hooks/`, `.claude-plugin/`, `.codex-plugin/` | Methodology spine + domain skill library for Claude Code / Codex |
+| Desktop app | `apps/desktop` | Speckit-native Tauri desktop app (Rust backend + React/Astryx UI) — pipeline execution, approvals, artifact editing |
+| Authoring toolchain | `packages/*` | TypeScript packages for validating, compiling, and installing skills to providers |
+
+## How the plugin works
 
 ```bash
 git clone https://github.com/truongnat/aix
@@ -40,34 +48,32 @@ No engine, no runtime — just skills the agent pulls in when needed.
 | 7 | Verify | `verify-pro` |
 | 8 | Remember | `remember-pro` |
 
-## Providers
+## Desktop app
 
-Install skills to other AI coding tools:
+`apps/desktop` is a Tauri 2 application implementing the speckit pipeline natively in Rust:
+project scanning, gate engine, provider streaming (Anthropic, OpenAI, Qwen, OpenRouter),
+tool-use loop with approval gating, cancellation, audit logging, and artifact management.
+Its frontend is React + Astryx. It does not depend on the TypeScript packages.
 
 ```bash
-node packages/cli/dist/index.js install --provider cursor
+pnpm --filter @aix/desktop build     # web bundle typecheck + build
+cd apps/desktop/src-tauri && cargo test --workspace
 ```
 
-## Monorepo
+Speckit templates are vendored under `content/speckit/` and SHA256-verified at load.
 
-13 packages for authoring, compiling, and headless execution:
+## Authoring toolchain
+
+6 packages for authoring, validating, compiling, and installing skills:
 
 | Package | Role |
 |---------|------|
 | `@x/registry` | SKILL.md schema (Zod), loader, catalog |
 | `@x/policy` | Secret/PII redaction, shell denylist |
-| `@x/providers` | Compile-time adapters + runtime LLM client |
+| `@x/providers` | Compile-time provider adapters (Claude, Cursor, Codex, Gemini) |
 | `@x/compiler` | Idempotent file emitter |
-| `@x/context` | Code analysis, RAG, wiki generation |
-| `@x/memory` | Markdown store for durable memory |
-| `@x/prompt` | Prompt assembly + linter |
-| `@x/engine` | Headless SDLC runner for CI/batch |
-| `@x/cli` | Command surface |
+| `@x/cli` | Command surface (`install`, `skills`, `doctor`) |
 | `@x/core` | Types, phase machine, guards |
-| `@x/evals` | A/B harness + rubric scoring |
-| `@x/hitl` | Human-in-the-loop channel |
-| `@x/preview` | Mermaid / image / HTML preview |
-| `services/kb-server` | SQLite knowledge base |
 
 ## Quick start
 
@@ -82,28 +88,14 @@ pnpm test
 ```bash
 aix install --all
 aix install --provider cursor
-aix run "<task>" [--auto]
 aix skills validate [--content-root <content-directory>]
 aix skills list
 aix skills show <name>
-aix memory push "<title>" "<body>"
-aix memory search "<query>"
-aix memory list
-aix verify <session-id> --command "<your verification command>"
-aix kb status
-aix eval <suite>
 aix doctor
 ```
 
 The workspace packages are private; build locally and use `node packages/cli/dist/index.js`
 in place of `aix` unless the executable is installed locally.
-
-`run` generates artifacts, not verified or shipped code. Its text score is heuristic.
-`verify` executes only your explicitly supplied command inside the session's `generated/`
-directory and records its real exit/output plus generated-file hashes. Choose checks that
-exercise your acceptance criteria; a successful arbitrary command is not a correctness proof.
-The unsupported `ship` command has been removed. No command automatically applies generated
-files to project source or deploys them.
 
 `skills/` is the canonical authoring source containing 160 skills organized in 9 categories.
 `aix skills list` regenerates the local catalog from canonical content;
@@ -115,25 +107,26 @@ validation includes invalid YAML/frontmatter and duplicate identifiers.
 .agents/plugins/  Codex marketplace entry for this repo
 .claude-plugin/   Claude Code plugin manifest
 .codex-plugin/    Codex plugin manifest
-hooks/            SessionStart → injects using-aix; requests optional KB startup if built
+hooks/            SessionStart → injects using-aix
 skills/           Canonical domain, process, and reference skills in 9 categories
 content/
   rules/          Spine guardrail rules
   workflows/      Engineering spine flow
-packages/         13 @x/* TypeScript packages
-services/         kb-server (SQLite, NestJS)
-apps/             Docs site + tooling
+  speckit/        Vendored speckit templates/extensions for the desktop app
+packages/         6 @x/* TypeScript authoring packages
+apps/
+  desktop/        Speckit-native Tauri desktop app
+  docs/           Documentation site
+docs/history/     Completed migration/assessment archives
 ```
 
 ## Security
 
-- Sensitive session/checkpoint prose and memory content are redacted before persistence.
-  Accepted resource IDs and operational paths retain their identity; secret-bearing
-  identifiers/paths and generated source are rejected instead of silently rewritten.
-- Invalid/closed approval input aborts. KB memory routes require a key or master password;
-  shutdown requires the master password. The standalone service binds loopback by default.
-- Budget guards constrain model execution. Text scoring and a shell denylist are not
-  substitutes for executable correctness checks or an OS security sandbox.
+- Sensitive session prose and memory content are redacted before persistence in the
+  authoring toolchain. Secret-bearing identifiers/paths are rejected instead of silently rewritten.
+- The desktop app stores provider credentials in an XDG config JSON file (0600 on unix)
+  with env-var fallback, and gates mutating tool calls behind explicit user approval.
+- A shell denylist is not a substitute for an OS security sandbox.
 
 ## License
 

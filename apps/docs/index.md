@@ -4,7 +4,7 @@ layout: home
 hero:
   name: aix
   text: Author Once,<br>Compile to Every Provider
-  tagline: Engineering methodology and canonical skills for host coding agents, with optional generation and knowledge tooling.
+  tagline: Engineering methodology and canonical skills for host coding agents, plus a speckit-native desktop app.
   actions:
     - theme: brand
       text: Get Started
@@ -18,13 +18,13 @@ features:
     title: Canonical Skills
     details: Write SKILL.md once. Compile to Claude Code, Cursor, Codex, and Gemini CLI automatically — no manual sync.
 
-  - icon: 🧠
-    title: SQLite Knowledge Base
-    details: SQLite/FTS5 with authenticated memory access and a process-local cache. No external graph/search/cache services required.
+  - icon: 🖥️
+    title: Speckit-Native Desktop
+    details: Tauri desktop app implementing the speckit pipeline in Rust — gates, provider streaming, approval-gated tool use, artifact editing.
 
-  - icon: 🤖
-    title: Headless Generation
-    details: Optional LangGraph generation with budgets, explicit approvals and file checkpoints. Correctness requires a separate user-supplied verification command.
+  - icon: 🧠
+    title: Markdown Memory
+    details: Durable memory as plain Markdown in .aix/runtime/memory/ — no service to install, searchable with standard file tools.
 
   - icon: 🔒
     title: Policy & Redaction
@@ -36,5 +36,5 @@ features:
 
   - icon: ⚡
     title: pnpm + Turborepo
-    details: 13 TypeScript packages plus service, docs and demo workspaces, with dependency-aware builds and test commands.
+    details: 6 TypeScript authoring packages plus desktop and docs workspaces, with dependency-aware builds and test commands.
 ---

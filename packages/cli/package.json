@@ -21,17 +21,9 @@
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "@clack/prompts": "^1.6.0",
     "@x/compiler": "workspace:*",
-    "@x/context": "workspace:*",
     "@x/core": "workspace:*",
-    "@x/engine": "workspace:*",
-    "@x/evals": "workspace:*",
-    "@x/hitl": "workspace:*",
-    "@x/memory": "workspace:*",
     "@x/policy": "workspace:*",
-    "@x/preview": "workspace:*",
-    "@x/prompt": "workspace:*",
     "@x/providers": "workspace:*",
     "@x/registry": "workspace:*",
     "commander": "^15.0.0"
