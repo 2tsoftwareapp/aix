@@ -6,11 +6,11 @@ import {
   Wrench, AlertTriangle, KeyRound, FolderOpen, Lock, CircleCheck, ChevronDown } from "lucide-react";
 import { useKeyStatus, useVendorConfigs } from "../lib/providerKeys";
 import { STEPS, STEP_ICONS, stepStatus } from "../lib/steps";
-import { useStepGates } from "../lib/stepGates";
+import { useStepGates, blockedTarget } from "../lib/stepGates";
 import { useAppToast } from "../lib/toast";
 import {
-  sortCatalog, formatContextLength,
-  type CatalogEntry,
+  sortCatalog, formatContextLength, searchModelItems, searchCatalogItems, vendorOf,
+  type CatalogEntry, type ModelSearchItem,
 } from "../lib/models";
 import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
@@ -22,6 +22,7 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Selector } from "@astryxdesign/core/Selector";
+import { Typeahead, type SearchSource } from "@astryxdesign/core/Typeahead";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatComposer,
@@ -384,6 +385,7 @@ function StepNavigator({
           {STEPS.map((s2, i) => {
             const gate = stepGates[s2.id];
             const blocked = gate != null && !gate.allowed;
+            const target = blockedTarget(blocked ? gate?.reason : null);
             const status = stepStatus(s2.id, pipeline, featureSlug);
             const isCurrent = s2.id === step;
             const ws = projectRoot
@@ -392,21 +394,28 @@ function StepNavigator({
                 )
               : undefined;
             return (
-              <button
+              <div
                 key={s2.id}
+                role="menuitem"
+                style={{
+                  display: "flex", alignItems: "center", width: "100%",
+                  background: isCurrent ? "rgba(255,255,255,0.08)" : "transparent",
+                  opacity: blocked ? 0.65 : 1,
+                }}
+                onMouseEnter={(e) => { if (!isCurrent) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+                onMouseLeave={(e) => { if (!isCurrent) e.currentTarget.style.background = "transparent"; }}
+              >
+              <button
                 type="button"
-                disabled={blocked}
                 title={blocked ? (gate?.reason ?? "blocked") : undefined}
+                aria-label={blocked ? `${s2.label}: ${gate?.reason ?? "blocked"}` : s2.label}
                 onClick={() => { onSelectStep(s2.id); setOpen(false); }}
                 style={{
-                  display: "flex", alignItems: "center", gap: 8, width: "100%",
-                  padding: "8px 12px", border: "none", cursor: blocked ? "not-allowed" : "pointer",
-                  background: isCurrent ? "rgba(255,255,255,0.08)" : "transparent",
+                  display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0,
+                  padding: "8px 12px", border: "none", cursor: "pointer",
+                  background: "transparent",
                   color: "inherit", font: "inherit", textAlign: "left",
-                  opacity: blocked ? 0.45 : 1,
                 }}
-                onMouseEnter={(e) => { if (!isCurrent && !blocked) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
-                onMouseLeave={(e) => { if (!isCurrent) e.currentTarget.style.background = "transparent"; }}
               >
                 {blocked ? (
                   <Icon icon={Lock} size="xsm" color="secondary" />
@@ -422,9 +431,25 @@ function StepNavigator({
                 </span>
                 {status === "done" && <Icon icon={CircleCheck} size="xsm" color="accent" />}
                 {ws?.running && <Spinner size="sm" shade="subtle" aria-label="running" />}
-                {ws != null && ws.approvals.length > 0 && <Icon icon={ShieldQuestion} size="xsm" color="warning" />}
+                {ws != null && ws.approvals.length > 0 && <Icon icon={ShieldQuestion} size="xsm" color="warning" aria-label="approval pending" />}
                 <Text type="code" size="2xs" color="secondary">{i + 1}</Text>
               </button>
+                {target && target !== s2.id && (
+                  <button
+                    type="button"
+                    aria-label={`Go to ${target}`}
+                    title={`Missing prerequisite — go to ${STEPS.find((x) => x.id === target)?.label ?? target}`}
+                    onClick={() => { onSelectStep(target); setOpen(false); }}
+                    style={{
+                      background: "none", border: "none", padding: "0 10px 0 0",
+                      color: "var(--color-accent, #4d9fff)", fontSize: 11, fontFamily: "inherit",
+                      whiteSpace: "nowrap", cursor: "pointer",
+                    }}
+                  >
+                    → {STEPS.find((x) => x.id === target)?.label ?? target}
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -464,6 +489,7 @@ export function ChatPanel({
   const stepGates = useStepGates(projectRoot, featureSlug, pipeline);
   const [providerId, setProviderId] = useState(() => localStorage.getItem("aix-provider") ?? "anthropic");
   const [model, setModel] = useState(() => localStorage.getItem("aix-model") ?? "claude-sonnet-4-5");
+  const modelQueryRef = useRef("");
   const [approvalMode, setApprovalMode] = useState(() => localStorage.getItem("aix-approval-mode") ?? "ask");
   const keyStatus = useKeyStatus();
   const vendorConfigs = useVendorConfigs();
@@ -684,7 +710,9 @@ export function ChatPanel({
       failedPrompt: null,
       lastPrompt: userInput,
     }));
-    const effectiveModel = model;
+    const typedModel = modelQueryRef.current.trim();
+    const effectiveModel = typedModel || model;
+    if (typedModel && typedModel !== model) setModel(typedModel);
     try {
       await invoke("run_step", {
         input: {
@@ -723,24 +751,27 @@ export function ChatPanel({
     catalog.length > 0 ? catalog : MODEL_OPTIONS.openrouter.map((id) => ({ id }))
   ), [catalog]);
 
-  const modelOptions = useMemo(() => {
-    const base = providerId === "openrouter"
-      ? openrouterEntries.map((e) => {
-          const slash = e.id.indexOf("/");
-          const vendor = slash > 0 ? e.id.slice(0, slash) : "";
-          const ctx = formatContextLength(e.context_length);
-          return {
-            value: e.id,
-            label: e.name ?? e.id,
-            description: [vendor, ctx].filter(Boolean).join(" · "),
-          };
-        })
-      : modelIds.map((id) => ({ value: id, label: id }));
-    if (model && !base.some((o) => o.value === model)) {
-      return [{ value: model, label: model, description: "custom" }, ...base];
+  const modelSearchSource = useMemo<SearchSource<ModelSearchItem>>(() => ({
+    search: (query: string) => providerId === "openrouter"
+      ? searchCatalogItems(openrouterEntries, query)
+      : searchModelItems(modelIds, query),
+    bootstrap: () => providerId === "openrouter"
+      ? searchCatalogItems(openrouterEntries, "")
+      : searchModelItems(modelIds, ""),
+  }), [providerId, openrouterEntries, modelIds]);
+  const selectedModel = useMemo<ModelSearchItem>(() => {
+    if (providerId === "openrouter") {
+      const entry = openrouterEntries.find((e) => e.id === model);
+      if (entry) {
+        return {
+          id: entry.id,
+          label: entry.name || entry.id,
+          auxiliaryData: { vendor: vendorOf(entry.id), contextLength: entry.context_length ?? undefined },
+        };
+      }
     }
-    return base;
-  }, [providerId, openrouterEntries, modelIds, model]);
+    return { id: model, label: model };
+  }, [providerId, openrouterEntries, model]);
 
   const hiddenApprovalWorkspace = Object.values(workspaces).find((candidate) =>
     candidate.key !== key
@@ -896,24 +927,43 @@ export function ChatPanel({
                       description: keyStatus[v.id] ? "configured" : "no key",
                     }))}
                     value={providerId}
-                    onChange={(p) => { setProviderId(p); setModel(staticModelsFor(p)[0] ?? ""); }}
+                    onChange={(p) => { modelQueryRef.current = ""; setProviderId(p); setModel(staticModelsFor(p)[0] ?? ""); }}
                     size="sm"
                     variant="ghost"
                   />
                 </HStack>
               }
               sendActions={
-                <Selector
+                <Typeahead
                   label="Model"
                   isLabelHidden
                   aria-label="Model"
-                  options={modelOptions}
-                  value={model}
-                  onChange={(m) => setModel(m)}
-                  hasSearch
-                  searchPlaceholder="Search models…"
+                  searchSource={modelSearchSource}
+                  value={selectedModel}
+                  onChange={(item) => {
+                    if (!item) return;
+                    modelQueryRef.current = "";
+                    setModel(item.id);
+                  }}
+                  onChangeQuery={(query) => { modelQueryRef.current = query; }}
+                  onBlur={() => {
+                    const typed = modelQueryRef.current.trim();
+                    if (typed) setModel(typed);
+                  }}
+                  renderItem={(item) => {
+                    if (item.auxiliaryData?.custom) return `Use "${item.id}"`;
+                    const meta = [item.auxiliaryData?.vendor, formatContextLength(item.auxiliaryData?.contextLength)]
+                      .filter(Boolean).join(" · ");
+                    return meta ? `${item.label} · ${meta}` : item.label;
+                  }}
+                  placeholder="Search or type model…"
+                  emptySearchText="Type an exact model ID"
+                  hasEntriesOnFocus
+                  hasClear={false}
+                  maxMenuItems={10}
+                  debounceMs={0}
                   size="sm"
-                  variant="ghost"
+                  width={240}
                 />
               }
               sendButton={
