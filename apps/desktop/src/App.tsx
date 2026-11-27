@@ -10,6 +10,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ProviderSetup } from "./components/ProviderSetup";
+import { MemoryBrowser } from "./components/MemoryBrowser";
 import { useAppToast } from "./lib/toast";
 import type { PipelineState, StepId } from "./types";
 import type { WorkspaceContext } from "./lib/workspaceSessions";
@@ -23,6 +24,7 @@ export function App() {
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const artifactResize = useResizable({
     defaultSize: 430,
@@ -109,7 +111,7 @@ export function App() {
     <>
       <AppShell
         height="fill"
-        variant="surface"
+        variant="section"
         contentPadding={0}
         sideNav={
           <Sidebar
@@ -119,6 +121,7 @@ export function App() {
             activeFeature={activeFeature}
             onSelectFeature={setActiveFeature}
             onOpenSetup={() => setShowSetup(true)}
+            onOpenMemory={() => setShowMemory(true)}
           />
         }
       >
@@ -172,6 +175,7 @@ export function App() {
         </HStack>
       </AppShell>
       <ProviderSetup isOpen={showSetup} onClose={() => setShowSetup(false)} />
+      <MemoryBrowser isOpen={showMemory} onClose={() => setShowMemory(false)} projectRoot={projectRoot} />
     </>
   );
 }

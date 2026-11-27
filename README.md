@@ -17,6 +17,12 @@ implement pipeline with an AI agent, with human approval gates at every step.
 - **Per-context workspaces** — drafts, transcripts and approvals are isolated
   per project + feature + step
 - **Artifact editor** — read and edit spec artifacts in-app with draft safety
+- **Hybrid code search** — BM25 plus optional embedding-based semantic search
+  with cached per-project vectors, provider/model overrides, and graceful lexical fallback
+- **Exact code intelligence** — LSP-powered definition, references, and document
+  symbols for Rust, TypeScript/JavaScript, and Python when language servers are installed
+- **Agent memory** — project-scoped memory backed by ai-memory for recall and
+  agent-owned notes during pipeline runs, with an in-app read-only browser
 
 ## Architecture
 
@@ -28,7 +34,10 @@ apps/desktop/
       speckit-core   pipeline steps, gates, runner state
       agent-loop     agent execution loop
       executor       tool execution with approval enforcement
-      providers      LLM provider clients
+      providers      LLM and embeddings provider clients
+      search         project code indexing, BM25, vector cache, hybrid retrieval
+      lsp            language-server clients for exact code intelligence
+      memory-bridge  project-scoped agent memory backed by ai-memory
       app-state      persisted app state
   speckit-templates/  vendored, SHA256-verified spec-kit templates
 ```

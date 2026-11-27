@@ -210,6 +210,76 @@ fn make_provider(provider_id: &str) -> Result<Box<dyn Provider>, String> {
     Ok(Box::new(OpenAiCompatProvider::from_vendor(key, cfg)))
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmbeddingSettings {
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+}
+
+fn validate_embedding_settings(
+    provider_id: Option<String>,
+    model: Option<String>,
+) -> Result<EmbeddingSettings, String> {
+    let provider_id = provider_id
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let model = model
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if let Some(id) = &provider_id {
+        let vendor = providers::vendor::vendor(id)
+            .ok_or_else(|| format!("unknown embedding provider: {id}"))?;
+        if !providers::embeddings::embedding_capable(vendor) {
+            return Err(format!("provider {id} does not support OpenAI-compatible embeddings"));
+        }
+    }
+    Ok(EmbeddingSettings { provider_id, model })
+}
+
+fn embedding_settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("embedding-settings.json")
+}
+
+fn load_embedding_settings_from(data_dir: &Path) -> Result<EmbeddingSettings, String> {
+    let path = embedding_settings_path(data_dir);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(EmbeddingSettings::default()),
+        Err(e) => return Err(format!("cannot read embedding settings {}: {e}", path.display())),
+    };
+    serde_json::from_str(&text).map_err(|e| format!("invalid embedding settings {}: {e}", path.display()))
+}
+
+fn save_embedding_settings_to(data_dir: &Path, settings: &EmbeddingSettings) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+    let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    std::fs::write(embedding_settings_path(data_dir), body).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_embedding_settings(app: AppHandle) -> Result<EmbeddingSettings, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    load_embedding_settings_from(&dir)
+}
+
+#[tauri::command]
+pub fn save_embedding_settings(
+    app: AppHandle,
+    provider_id: Option<String>,
+    model: Option<String>,
+) -> Result<EmbeddingSettings, String> {
+    let settings = validate_embedding_settings(provider_id, model)?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    save_embedding_settings_to(&dir, &settings)?;
+    Ok(settings)
+}
+
 /// Per-artifact context budget (~25k tokens at 4 chars/token). Oversized artifacts
 /// are truncated with an explicit marker so the model knows content is missing —
 /// silent truncation here would corrupt downstream artifacts.
@@ -963,8 +1033,15 @@ pub async fn run_step(
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("aix-memory-fallback"));
-    let embedding_provider = std::env::var("AIX_EMBEDDING_PROVIDER").ok().filter(|v| !v.trim().is_empty());
-    let embedding_model = std::env::var("AIX_EMBEDDING_MODEL").ok().filter(|v| !v.trim().is_empty());
+    let saved_embedding_settings = load_embedding_settings_from(&search_data_dir)?;
+    let embedding_provider = std::env::var("AIX_EMBEDDING_PROVIDER")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or(saved_embedding_settings.provider_id);
+    let embedding_model = std::env::var("AIX_EMBEDDING_MODEL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or(saved_embedding_settings.model);
     let embedding_config = providers::embeddings::resolve_embedding_config(
         Some(&input.provider_id),
         embedding_provider.as_deref(),
@@ -1301,6 +1378,82 @@ pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::M
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct MemoryPageHitDto {
+    pub path: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct MemoryPageDetailDto {
+    pub path: String,
+    pub title: String,
+    pub body: String,
+}
+
+async fn search_memory_page_hits(
+    memory: &memory_bridge::MemoryBridge,
+    project_key: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<MemoryPageHitDto>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    memory
+        .search(project_key, query, limit.clamp(1, 50))
+        .await
+        .map(|hits| {
+            hits.into_iter()
+                .map(|hit| MemoryPageHitDto {
+                    path: hit.path,
+                    title: hit.title,
+                    snippet: hit.snippet,
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+async fn read_memory_page_detail(
+    memory: &memory_bridge::MemoryBridge,
+    project_key: &str,
+    path: &str,
+) -> Result<Option<MemoryPageDetailDto>, String> {
+    let scope = memory.scope_for(project_key).await.map_err(|e| e.to_string())?;
+    memory
+        .read_page(scope, path)
+        .map(|page| {
+            page.map(|page| MemoryPageDetailDto {
+                path: path.to_string(),
+                title: page.title,
+                body: page.body,
+            })
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_memory_pages(
+    memory: tauri::State<'_, std::sync::Arc<memory_bridge::MemoryBridge>>,
+    project_root: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryPageHitDto>, String> {
+    search_memory_page_hits(memory.inner().as_ref(), &project_root, &query, limit.unwrap_or(20)).await
+}
+
+#[tauri::command]
+pub async fn read_memory_page(
+    memory: tauri::State<'_, std::sync::Arc<memory_bridge::MemoryBridge>>,
+    project_root: String,
+    path: String,
+) -> Result<Option<MemoryPageDetailDto>, String> {
+    read_memory_page_detail(memory.inner().as_ref(), &project_root, &path).await
+}
+
 /// Serializable vendor metadata for the settings UI — no secrets, just
 /// display/config fields from vendors.json.
 #[derive(serde::Serialize)]
@@ -1338,6 +1491,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         memory_bridge::MemoryBridge::open(&dir).unwrap()
+    }
+
+    #[test]
+    fn embedding_settings_roundtrip_through_app_data_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("aix-settings-{nonce}"));
+        let settings = super::EmbeddingSettings {
+            provider_id: Some("openrouter".into()),
+            model: Some("openai/text-embedding-3-large".into()),
+        };
+        super::save_embedding_settings_to(&dir, &settings).unwrap();
+        assert_eq!(super::load_embedding_settings_from(&dir).unwrap(), settings);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn embedding_settings_reject_non_embedding_provider() {
+        assert!(super::validate_embedding_settings(Some("anthropic".into()), None).is_err());
+    }
+
+    #[test]
+    fn embedding_settings_read_errors_other_than_missing_file_are_visible() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("aix-settings-error-{nonce}"));
+        std::fs::create_dir_all(dir.join("embedding-settings.json")).unwrap();
+        assert!(super::load_embedding_settings_from(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn embedding_settings_normalize_blank_values_to_automatic() {
+        let settings = super::validate_embedding_settings(Some("  ".into()), Some("".into())).unwrap();
+        assert_eq!(settings, super::EmbeddingSettings::default());
+    }
+
+    #[tokio::test]
+    async fn memory_page_commands_search_and_read_written_page() {
+        let bridge = memory_bridge_in_tempdir();
+        bridge
+            .write_page("/proj/x", "decisions/search", "Search design", "hybrid retrieval uses RRF memory-token")
+            .await
+            .unwrap();
+        let hits = super::search_memory_page_hits(&bridge, "/proj/x", "memory-token", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Search design");
+        let page = super::read_memory_page_detail(&bridge, "/proj/x", "decisions/search").await.unwrap().unwrap();
+        assert!(page.body.contains("hybrid retrieval"));
+        assert_eq!(page.path, "decisions/search");
+    }
+
+    #[tokio::test]
+    async fn memory_page_search_with_blank_query_returns_empty() {
+        let bridge = memory_bridge_in_tempdir();
+        let hits = super::search_memory_page_hits(&bridge, "/proj/x", "   ", 10).await.unwrap();
+        assert!(hits.is_empty());
     }
 
     #[tokio::test]

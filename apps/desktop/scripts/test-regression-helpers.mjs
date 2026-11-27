@@ -31,26 +31,6 @@ const { stripMarkdownComments } = loadTsModule(new URL("../src/lib/markdown.ts",
   assert.equal(stripMarkdownComments(input), input, "tilde fences keep sample comments verbatim");
 }
 
-const { searchModelItems } = loadTsModule(new URL("../src/lib/models.ts", import.meta.url));
-
-{
-  const items = searchModelItems(["claude-sonnet-4-5", "claude-opus-4-5"], "sonnet");
-  assert.deepEqual(items.map((item) => item.id), ["claude-sonnet-4-5", "sonnet"], "model search ranks catalog matches before a custom typed id");
-}
-{
-  const items = searchModelItems(["claude-sonnet-4-5"], "custom-model-2026");
-  assert.equal(items[0]?.id, "custom-model-2026", "unknown typed model remains selectable");
-  assert.equal(items[0]?.auxiliaryData?.custom, true, "typed model is marked as custom");
-}
-{
-  const items = searchModelItems(["claude-sonnet-4-5"], "claude-sonnet-4-5");
-  assert.equal(items.filter((item) => item.id === "claude-sonnet-4-5").length, 1, "exact catalog matches are not duplicated");
-}
-{
-  const items = searchModelItems(["a", "b"], "");
-  assert.deepEqual(items.map((item) => item.id), ["a", "b"], "empty query lists available models");
-}
-
 
 const workspaceModulePath = new URL("../src/lib/workspaceSessions.ts", import.meta.url);
 const {
@@ -107,8 +87,10 @@ const chatPanelSource = readFileSync(new URL("../src/components/ChatPanel.tsx", 
 const artifactPanelSource = readFileSync(new URL("../src/components/ArtifactPanel.tsx", import.meta.url), "utf8");
 
 {
-  assert.match(chatPanelSource, /const effectiveModel = typedModel \|\| model/, "run_step uses the typed model when the user does not open the menu");
-  assert.match(chatPanelSource, /model: effectiveModel/, "the effective typed model is sent to the backend");
+  assert.match(chatPanelSource, /^\s+model,$/m, "the selected model is sent to the backend");
+  assert.match(chatPanelSource, /description: "custom"/, "a persisted custom model stays visible in the selector options");
+  assert.match(chatPanelSource, /hasSearch/, "the model selector offers search like the other chat selectors");
+  assert.doesNotMatch(chatPanelSource, /Typeahead/, "the model picker uses the same Selector control as the other chat selects");
   assert.doesNotMatch(
     chatPanelSource,
     /setMessages\(\[\]\);\s*\}, \[step, projectRoot, featureSlug\]\);/,
@@ -144,6 +126,8 @@ const commandsSource = readFileSync(new URL("../src-tauri/src/commands.rs", impo
 }
 
 const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
+const providerSetupSource = readFileSync(new URL("../src/components/ProviderSetup.tsx", import.meta.url), "utf8");
+const memoryBrowserSource = readFileSync(new URL("../src/components/MemoryBrowser.tsx", import.meta.url), "utf8");
 const stepsLibSource = readFileSync(new URL("../src/lib/steps.ts", import.meta.url), "utf8");
 {
   assert.match(chatPanelSource, /stepWorkspaceMatches/, "step navigation finds run state at the originating workspace step");
@@ -154,6 +138,21 @@ const stepsLibSource = readFileSync(new URL("../src/lib/steps.ts", import.meta.u
   assert.doesNotMatch(chatPanelSource, /disabled=\{blocked\}/, "blocked steps stay navigable — the gate blocks runs, not viewing workspaces");
   assert.match(stepsLibSource, /case "clarify":\s*return "none"/, "spec.md existing does not mark clarify as completed");
   assert.match(sidebarSource, /\/3 docs/, "feature rows distinguish artifact/document presence from run state");
+}
+{
+  assert.match(providerSetupSource, /get_embedding_settings/, "provider settings load persisted embedding overrides");
+  assert.match(providerSetupSource, /save_embedding_settings/, "provider settings save embedding overrides");
+  assert.match(providerSetupSource, /AIX_EMBEDDING_PROVIDER/, "embedding settings document environment precedence");
+  assert.match(commandsSource, /embedding-settings\.json/, "embedding overrides persist in app data");
+  assert.match(commandsSource, /embedding_capable/, "embedding provider validation rejects non-embedding vendors");
+}
+{
+  assert.match(appSource, /MemoryBrowser/, "app wires the memory browser dialog");
+  assert.match(sidebarSource, /Project memory/, "sidebar exposes project memory");
+  assert.match(memoryBrowserSource, /search_memory_pages/, "memory browser searches project-scoped memory pages");
+  assert.match(memoryBrowserSource, /read_memory_page/, "memory browser reads full memory pages");
+  assert.match(commandsSource, /search_memory_pages/, "backend exposes memory page search");
+  assert.match(commandsSource, /read_memory_page/, "backend exposes memory page reads");
 }
 
 console.log("regression helper tests passed");

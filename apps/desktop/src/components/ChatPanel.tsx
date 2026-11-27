@@ -9,8 +9,8 @@ import { STEPS, STEP_ICONS, stepStatus } from "../lib/steps";
 import { useStepGates, blockedTarget } from "../lib/stepGates";
 import { useAppToast } from "../lib/toast";
 import {
-  sortCatalog, formatContextLength, searchModelItems, searchCatalogItems, vendorOf,
-  type CatalogEntry, type ModelSearchItem,
+  sortCatalog, formatContextLength, vendorOf,
+  type CatalogEntry,
 } from "../lib/models";
 import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
@@ -22,7 +22,6 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Selector } from "@astryxdesign/core/Selector";
-import { Typeahead, type SearchSource } from "@astryxdesign/core/Typeahead";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatComposer,
@@ -239,9 +238,11 @@ function ReadyState({
   ready,
   step,
   featureSlug,
+  hasConstitution,
   onOpenProject,
   onOpenSetup,
   onUsePrompt,
+  onInitProject,
 }: {
   projectRoot: string | null;
   providerId: string;
@@ -249,9 +250,11 @@ function ReadyState({
   ready: boolean;
   step: StepId;
   featureSlug: string | null;
+  hasConstitution: boolean;
   onOpenProject: () => Promise<void>;
   onOpenSetup: () => void;
   onUsePrompt: (prompt: string) => void;
+  onInitProject: () => void;
 }) {
   if (!projectRoot) {
     return (
@@ -274,6 +277,23 @@ function ReadyState({
     );
   }
   if (ready) {
+    if (!hasConstitution && step !== "constitution") {
+      return (
+        <EmptyState
+          icon={<Icon icon={STEP_ICONS.constitution} size="lg" color="accent" />}
+          title="Initialize Spec Kit for this project"
+          description="This project has no speckit constitution yet. The constitution pins down the principles every later phase is evaluated against — start there, then specify your first feature."
+          actions={
+            <Button
+              label="Draft constitution"
+              variant="primary"
+              icon={<Icon icon={STEP_ICONS.constitution} size="sm" />}
+              onClick={onInitProject}
+            />
+          }
+        />
+      );
+    }
     const starter = STEP_STARTERS[step];
     return (
       <VStack gap={4} hAlign="center" padding={4} width="100%" style={{ maxWidth: 560 }}>
@@ -489,7 +509,6 @@ export function ChatPanel({
   const stepGates = useStepGates(projectRoot, featureSlug, pipeline);
   const [providerId, setProviderId] = useState(() => localStorage.getItem("aix-provider") ?? "anthropic");
   const [model, setModel] = useState(() => localStorage.getItem("aix-model") ?? "claude-sonnet-4-5");
-  const modelQueryRef = useRef("");
   const [approvalMode, setApprovalMode] = useState(() => localStorage.getItem("aix-approval-mode") ?? "ask");
   const keyStatus = useKeyStatus();
   const vendorConfigs = useVendorConfigs();
@@ -710,9 +729,6 @@ export function ChatPanel({
       failedPrompt: null,
       lastPrompt: userInput,
     }));
-    const typedModel = modelQueryRef.current.trim();
-    const effectiveModel = typedModel || model;
-    if (typedModel && typedModel !== model) setModel(typedModel);
     try {
       await invoke("run_step", {
         input: {
@@ -721,7 +737,7 @@ export function ChatPanel({
           feature_slug: featureSlug,
           user_input: userInput,
           provider_id: providerId,
-          model: effectiveModel,
+          model,
           approval_mode: approvalMode,
           confirmed: gate?.needs_confirmation ? true : undefined,
           run_id: runId,
@@ -751,27 +767,20 @@ export function ChatPanel({
     catalog.length > 0 ? catalog : MODEL_OPTIONS.openrouter.map((id) => ({ id }))
   ), [catalog]);
 
-  const modelSearchSource = useMemo<SearchSource<ModelSearchItem>>(() => ({
-    search: (query: string) => providerId === "openrouter"
-      ? searchCatalogItems(openrouterEntries, query)
-      : searchModelItems(modelIds, query),
-    bootstrap: () => providerId === "openrouter"
-      ? searchCatalogItems(openrouterEntries, "")
-      : searchModelItems(modelIds, ""),
-  }), [providerId, openrouterEntries, modelIds]);
-  const selectedModel = useMemo<ModelSearchItem>(() => {
-    if (providerId === "openrouter") {
-      const entry = openrouterEntries.find((e) => e.id === model);
-      if (entry) {
-        return {
-          id: entry.id,
+  const modelOptions = useMemo(() => {
+    const items = providerId === "openrouter"
+      ? openrouterEntries.map((entry) => ({
+          value: entry.id,
           label: entry.name || entry.id,
-          auxiliaryData: { vendor: vendorOf(entry.id), contextLength: entry.context_length ?? undefined },
-        };
-      }
+          description: [vendorOf(entry.id), formatContextLength(entry.context_length)]
+            .filter(Boolean).join(" · ") || undefined,
+        }))
+      : modelIds.map((id) => ({ value: id, label: id }));
+    if (model && !items.some((item) => item.value === model)) {
+      return [{ value: model, label: model, description: "custom" }, ...items];
     }
-    return { id: model, label: model };
-  }, [providerId, openrouterEntries, model]);
+    return items;
+  }, [providerId, openrouterEntries, modelIds, model]);
 
   const hiddenApprovalWorkspace = Object.values(workspaces).find((candidate) =>
     candidate.key !== key
@@ -857,9 +866,19 @@ export function ChatPanel({
               ready={!!ready}
               step={step}
               featureSlug={featureSlug}
+              hasConstitution={pipeline?.has_constitution ?? true}
               onOpenProject={onOpenProject}
               onOpenSetup={onOpenSetup}
               onUsePrompt={setInput}
+              onInitProject={() => {
+                if (!projectRoot) return;
+                const targetContext: WorkspaceContext = { projectRoot, featureSlug, step: "constitution" };
+                updateWorkspace(workspaceKey(projectRoot, featureSlug, "constitution"), targetContext, (current) => ({
+                  ...current,
+                  draft: "Draft a constitution for this project based on the codebase and existing docs",
+                }));
+                onSelectStep("constitution");
+              }}
             />
           }
           composer={
@@ -880,7 +899,7 @@ export function ChatPanel({
               input={<ChatComposerInput style={{ minHeight: 66 }} />}
               style={{ "--focus-outline-color": "transparent" } as React.CSSProperties}
               density="compact"
-              elevation="low"
+              elevation="none"
               status={composerStatus}
               footerActions={
                 <HStack gap={1} vAlign="center">
@@ -927,43 +946,25 @@ export function ChatPanel({
                       description: keyStatus[v.id] ? "configured" : "no key",
                     }))}
                     value={providerId}
-                    onChange={(p) => { modelQueryRef.current = ""; setProviderId(p); setModel(staticModelsFor(p)[0] ?? ""); }}
+                    onChange={(p) => { setProviderId(p); setModel(staticModelsFor(p)[0] ?? ""); }}
                     size="sm"
                     variant="ghost"
                   />
                 </HStack>
               }
               sendActions={
-                <Typeahead
+                <Selector
                   label="Model"
                   isLabelHidden
                   aria-label="Model"
-                  searchSource={modelSearchSource}
-                  value={selectedModel}
-                  onChange={(item) => {
-                    if (!item) return;
-                    modelQueryRef.current = "";
-                    setModel(item.id);
-                  }}
-                  onChangeQuery={(query) => { modelQueryRef.current = query; }}
-                  onBlur={() => {
-                    const typed = modelQueryRef.current.trim();
-                    if (typed) setModel(typed);
-                  }}
-                  renderItem={(item) => {
-                    if (item.auxiliaryData?.custom) return `Use "${item.id}"`;
-                    const meta = [item.auxiliaryData?.vendor, formatContextLength(item.auxiliaryData?.contextLength)]
-                      .filter(Boolean).join(" · ");
-                    return meta ? `${item.label} · ${meta}` : item.label;
-                  }}
-                  placeholder="Search or type model…"
-                  emptySearchText="Type an exact model ID"
-                  hasEntriesOnFocus
-                  hasClear={false}
-                  maxMenuItems={10}
-                  debounceMs={0}
+                  options={modelOptions}
+                  value={model}
+                  onChange={(m) => { if (m) setModel(m); }}
                   size="sm"
-                  width={240}
+                  variant="ghost"
+                  hasSearch
+                  searchPlaceholder="Search models…"
+                  emptySearchText="No model matches"
                 />
               }
               sendButton={

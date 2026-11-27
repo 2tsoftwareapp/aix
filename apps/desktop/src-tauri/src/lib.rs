@@ -2,10 +2,12 @@ mod commands;
 
 use commands::{
     delete_provider_key,
+    get_embedding_settings,
     list_models,
     list_vendor_configs,
     cancel_run, check_gate, flip_checklist_item, has_provider_key, read_artifact, respond_approval,
-    run_step, scan_pipeline, store_provider_key, write_artifact, ApprovalRegistry, RunCancellation,
+    read_memory_page, run_step, scan_pipeline, save_embedding_settings, search_memory_pages,
+    store_provider_key, write_artifact, ApprovalRegistry, RunCancellation,
     close_project_lsp,
 };
 use speckit_core::TemplateStore;
@@ -52,10 +54,14 @@ pub fn run() {
             store_provider_key,
             has_provider_key,
             read_artifact,
+            read_memory_page,
+            search_memory_pages,
             write_artifact,
             flip_checklist_item,
             template_count,
             delete_provider_key,
+            get_embedding_settings,
+            save_embedding_settings,
             list_models,
             list_vendor_configs,
             commands::is_git_repo,

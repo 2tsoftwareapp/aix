@@ -19,6 +19,11 @@ interface VendorItem {
   direct: boolean;
 }
 
+interface EmbeddingSettings {
+  provider_id: string | null;
+  model: string | null;
+}
+
 function prettify(id: string): string {
   return id.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
@@ -32,6 +37,10 @@ export function ProviderSetup({ isOpen, onClose }: { isOpen: boolean; onClose: (
   const [, setVendorQuery] = useState("");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [embeddingProviderId, setEmbeddingProviderId] = useState<string | null>(null);
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [embeddingBusy, setEmbeddingBusy] = useState(false);
+  const [, setEmbeddingQuery] = useState("");
 
   const vendor = vendors.find((v) => v.id === vendorId) ?? null;
   const configuredVendors = vendors.filter((v) => keyStatus[v.id]);
@@ -73,6 +82,52 @@ export function ProviderSetup({ isOpen, onClose }: { isOpen: boolean; onClose: (
   const selectedVendorItem = useMemo<VendorItem | null>(() => (
     vendorId ? { id: vendorId, label: vendor?.display ?? prettify(vendorId), direct: !!vendor } : null
   ), [vendorId, vendor]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    invoke<EmbeddingSettings>("get_embedding_settings")
+      .then((settings) => {
+        setEmbeddingProviderId(settings.provider_id);
+        setEmbeddingModel(settings.model ?? "");
+      })
+      .catch((error) => toast.error("Couldn't load embedding settings", String(error)));
+  }, [isOpen, toast]);
+
+  const embeddingVendorSource = useMemo<SearchSource<VendorItem>>(() => {
+    const items: VendorItem[] = vendors
+      .filter((v) => v.kind === "openai_compat" && (keyStatus[v.id] || v.id === embeddingProviderId))
+      .map((v) => ({ id: v.id, label: v.display, direct: true }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const match = (query: string) => {
+      const needle = query.trim().toLowerCase();
+      return items.filter((i) => !needle || i.label.toLowerCase().includes(needle) || i.id.includes(needle));
+    };
+    return { search: match, bootstrap: () => items };
+  }, [vendors, keyStatus, embeddingProviderId]);
+
+  const selectedEmbeddingVendorItem = useMemo<VendorItem | null>(() => {
+    if (!embeddingProviderId) return null;
+    const configured = vendors.find((v) => v.id === embeddingProviderId);
+    return { id: embeddingProviderId, label: configured?.display ?? prettify(embeddingProviderId), direct: true };
+  }, [embeddingProviderId, vendors]);
+
+  const saveEmbedding = async (providerId: string | null = embeddingProviderId, model: string = embeddingModel) => {
+    if (embeddingBusy) return;
+    setEmbeddingBusy(true);
+    try {
+      const saved = await invoke<EmbeddingSettings>("save_embedding_settings", {
+        providerId,
+        model: model.trim() || null,
+      });
+      setEmbeddingProviderId(saved.provider_id);
+      setEmbeddingModel(saved.model ?? "");
+      toast.success("Embedding settings saved", providerId || model.trim() ? "embedding override active" : "automatic embedding selection restored");
+    } catch (error) {
+      toast.error("Couldn't save embedding settings", String(error));
+    } finally {
+      setEmbeddingBusy(false);
+    }
+  };
 
   const save = async () => {
     const trimmed = key.trim();
@@ -184,6 +239,66 @@ export function ProviderSetup({ isOpen, onClose }: { isOpen: boolean; onClose: (
                   Nothing to configure here.
                 </Text>
               )}
+
+              <VStack gap={2} width="100%">
+                <Text type="large" size="sm" weight="semibold">Embeddings for code search</Text>
+                <HStack gap={2} width="100%" vAlign="end">
+                  <StackItem size="fill">
+                    <Typeahead
+                      label="Provider override"
+                      aria-label="Embedding provider override"
+                      searchSource={embeddingVendorSource}
+                      value={selectedEmbeddingVendorItem}
+                      onChange={(item) => {
+                        if (!item) return;
+                        setEmbeddingQuery("");
+                        setEmbeddingProviderId(item.id);
+                      }}
+                      onChangeQuery={setEmbeddingQuery}
+                      renderItem={(item) => <Text type="body" size="sm">{item.label}</Text>}
+                      placeholder="Automatic"
+                      emptySearchText="No configured embedding provider matches"
+                      hasEntriesOnFocus
+                      hasClear={false}
+                      maxMenuItems={8}
+                      debounceMs={0}
+                      size="md"
+                      width="100%"
+                    />
+                  </StackItem>
+                  <StackItem size="fill">
+                    <TextInput
+                      label="Model override"
+                      aria-label="Embedding model override"
+                      value={embeddingModel}
+                      onChange={setEmbeddingModel}
+                      placeholder="text-embedding-3-small"
+                      width="100%"
+                    />
+                  </StackItem>
+                </HStack>
+                <HStack gap={2} justify="end" width="100%">
+                  <Button
+                    label="Automatic"
+                    variant="ghost"
+                    isDisabled={embeddingBusy || (!embeddingProviderId && !embeddingModel)}
+                    clickAction={() => {
+                      setEmbeddingProviderId(null);
+                      setEmbeddingModel("");
+                      void saveEmbedding(null, "");
+                    }}
+                  />
+                  <Button
+                    label="Save embeddings"
+                    variant="secondary"
+                    isLoading={embeddingBusy}
+                    clickAction={() => void saveEmbedding()}
+                  />
+                </HStack>
+                <Text type="supporting" size="xsm" color="secondary">
+                  Blank means automatic provider/model selection. Environment variables AIX_EMBEDDING_PROVIDER and AIX_EMBEDDING_MODEL take precedence when set.
+                </Text>
+              </VStack>
 
               {configuredVendors.length > 0 && (
                 <VStack gap={1} width="100%">

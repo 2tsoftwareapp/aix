@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FolderOpen, MoreHorizontal,
-  Settings2, CircleCheck, FileText, LoaderCircle, ShieldQuestion, FolderPlus } from "lucide-react";
+  Settings2, CircleCheck, FileText, LoaderCircle, ShieldQuestion, FolderPlus, Brain } from "lucide-react";
 import { SideNav, SideNavItem, SideNavSection, SideNavCollapseButton, useSideNavCollapse } from "@astryxdesign/core/SideNav";
 import { HStack, VStack, StackItem } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
@@ -159,12 +159,25 @@ function ProjectRow({ path, isActive, onOpenProject }: {
   );
 }
 
-function SidebarFooter({ onOpenSetup }: { onOpenSetup: () => void }) {
+function SidebarFooter({ onOpenSetup, onOpenMemory, memoryEnabled }: {
+  onOpenSetup: () => void;
+  onOpenMemory: () => void;
+  memoryEnabled: boolean;
+}) {
   const collapse = useSideNavCollapse();
   const collapsed = collapse?.isCollapsed ?? false;
   if (collapsed) {
     return (
-      <VStack padding={2} hAlign="center">
+      <VStack padding={2} hAlign="center" gap={1}>
+        <Button
+          label="Project memory"
+          variant="ghost"
+          size="sm"
+          isIconOnly
+          isDisabled={!memoryEnabled}
+          icon={<Icon icon={Brain} size="sm" />}
+          onClick={onOpenMemory}
+        />
         <Button
           label="Provider settings"
           variant="ghost"
@@ -177,7 +190,16 @@ function SidebarFooter({ onOpenSetup }: { onOpenSetup: () => void }) {
     );
   }
   return (
-    <VStack padding={2}>
+    <VStack padding={2} gap={1}>
+      <Button
+        label="Project memory"
+        variant="ghost"
+        size="sm"
+        width="100%"
+        isDisabled={!memoryEnabled}
+        icon={<Icon icon={Brain} size="sm" />}
+        onClick={onOpenMemory}
+      />
       <Button
         label="Provider settings"
         variant="ghost"
@@ -220,6 +242,7 @@ export function Sidebar({
   activeFeature,
   onSelectFeature,
   onOpenSetup,
+  onOpenMemory,
 }: {
   projectRoot: string | null;
   onOpenProject: (path: string) => void;
@@ -227,6 +250,7 @@ export function Sidebar({
   activeFeature: string | null;
   onSelectFeature: (slug: string) => void;
   onOpenSetup: () => void;
+  onOpenMemory: () => void;
 }) {
   const [pathInput, setPathInput] = useState("");
   const [editing, setEditing] = useState(false);
@@ -245,7 +269,7 @@ export function Sidebar({
       resizable={{ defaultWidth: 280, minWidth: 220, maxWidth: 420, autoSaveId: "aix-sidebar-width" }}
       collapsible={{ hasButton: false }}
       header={<BrandHeader />}
-      footer={<SidebarFooter onOpenSetup={onOpenSetup} />}
+      footer={<SidebarFooter onOpenSetup={onOpenSetup} onOpenMemory={onOpenMemory} memoryEnabled={!!projectRoot} />}
     >
       <SideNavSection title="Projects">
         <VStack gap={1} paddingBlockEnd={1}>

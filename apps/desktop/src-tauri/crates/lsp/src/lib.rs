@@ -102,27 +102,7 @@ impl LspClient {
         Self::spawn_command(root, language, program, &args).await
     }
 
-    #[cfg(test)]
     async fn spawn_command(
-        root: &Path,
-        language: Language,
-        program: &str,
-        args: &[&str],
-    ) -> Result<Self, LspError> {
-        Self::spawn_command_impl(root, language, program, args).await
-    }
-
-    #[cfg(not(test))]
-    async fn spawn_command(
-        root: &Path,
-        language: Language,
-        program: &str,
-        args: &[&str],
-    ) -> Result<Self, LspError> {
-        Self::spawn_command_impl(root, language, program, args).await
-    }
-
-    async fn spawn_command_impl(
         root: &Path,
         _language: Language,
         program: &str,
@@ -707,5 +687,52 @@ while True:
         assert_eq!(symbols[1].name, "inner");
         assert_eq!(symbols[1].container.as_deref(), Some("outer"));
         assert_eq!(symbols[1].line, 3);
+    }
+
+    #[tokio::test]
+    async fn real_rust_analyzer_smoke_test_when_available() {
+        if std::process::Command::new("rust-analyzer")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"lsp-smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let source = root.join("src/main.rs");
+        fs::write(
+            &source,
+            "fn target() -> i32 {\n    42\n}\n\nfn main() {\n    let value = target();\n    println!(\"{value}\");\n}\n",
+        )
+        .unwrap();
+
+        let client = LspClient::spawn(&root, Language::Rust).await.unwrap();
+        let mut definitions = Vec::new();
+        for _ in 0..20 {
+            definitions = client
+                .goto_definition(&source, 6, 18)
+                .await
+                .unwrap_or_default();
+            if !definitions.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        client.shutdown().await;
+        assert!(
+            definitions.iter().any(|loc| loc.line == 1),
+            "rust-analyzer should resolve the target function on line 1: {definitions:?}"
+        );
     }
 }

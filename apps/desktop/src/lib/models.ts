@@ -1,13 +1,3 @@
-export interface ModelSearchItem {
-  id: string;
-  label: string;
-  auxiliaryData?: {
-    custom?: boolean;
-    vendor?: string;
-    contextLength?: number;
-  };
-}
-
 export interface CatalogEntry {
   id: string;
   name?: string;
@@ -25,45 +15,6 @@ export function formatContextLength(n?: number | null): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M ctx`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}k ctx`;
   return `${n} ctx`;
-}
-
-/** Bare-id search for direct providers (anthropic/openai/qwen). */
-export function searchModelItems(modelIds: string[], query: string): ModelSearchItem[] {
-  const trimmed = query.trim();
-  const needle = trimmed.toLowerCase();
-  const matches = modelIds
-    .filter((id) => !needle || id.toLowerCase().includes(needle))
-    .map((id) => ({ id, label: id }));
-
-  if (!trimmed) return matches;
-  if (modelIds.includes(trimmed)) return matches;
-  return [...matches, { id: trimmed, label: trimmed, auxiliaryData: { custom: true } }];
-}
-
-/**
- * Catalog-driven search for OpenRouter: matches display name AND id,
- * carries vendor + context length so the picker can render rich rows.
- */
-export function searchCatalogItems(entries: CatalogEntry[], query: string): ModelSearchItem[] {
-  const trimmed = query.trim();
-  const needle = trimmed.toLowerCase();
-  const matches = entries
-    .filter((e) =>
-      !needle
-      || e.id.toLowerCase().includes(needle)
-      || (e.name ?? "").toLowerCase().includes(needle))
-    .map((e) => ({
-      id: e.id,
-      label: e.name || e.id,
-      auxiliaryData: {
-        vendor: vendorOf(e.id),
-        contextLength: e.context_length ?? undefined,
-      },
-    }));
-
-  if (!trimmed) return matches;
-  if (entries.some((e) => e.id === trimmed)) return matches;
-  return [...matches, { id: trimmed, label: trimmed, auxiliaryData: { custom: true } }];
 }
 
 /** Stable ordering: vendor asc, then display name asc. */
