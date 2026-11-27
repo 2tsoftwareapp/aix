@@ -6,6 +6,7 @@
 //! per-file mtimes for incremental reindexing.
 
 use ignore::WalkBuilder;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -33,6 +34,10 @@ pub enum SearchError {
     Json(#[from] serde_json::Error),
     #[error("project root not found: {0}")]
     MissingRoot(String),
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,6 +46,14 @@ pub struct Hit {
     pub start_line: u32,
     pub score: f32,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingChunk {
+    pub path: String,
+    pub start_line: u32,
+    pub content_hash: String,
+    pub content: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -53,6 +66,7 @@ pub struct IndexStats {
 
 pub struct ProjectIndex {
     root: PathBuf,
+    db: rusqlite::Connection,
     index: Index,
     reader: IndexReader,
     f_path: Field,
@@ -109,8 +123,26 @@ impl ProjectIndex {
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
+        let db = rusqlite::Connection::open(dir.join("vectors.db"))?;
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS chunks(
+                path TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                PRIMARY KEY(path, start_line)
+            );
+            CREATE TABLE IF NOT EXISTS embeddings(
+                model TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                PRIMARY KEY(model, content_hash)
+            );",
+        )?;
+
         Ok(Self {
             root: project_root.to_path_buf(),
+            db,
             index,
             reader,
             f_path,
@@ -139,6 +171,12 @@ impl ProjectIndex {
         let mut meta = self.load_meta();
         let mut writer: IndexWriter = self.index.writer(INDEX_WRITER_HEAP)?;
         let mut seen = std::collections::HashSet::new();
+        let mut chunk_updates: Vec<(String, Vec<(u64, String)>)> = Vec::new();
+        let mut chunk_stmt = self.db.prepare("SELECT DISTINCT path FROM chunks")?;
+        let chunk_paths = chunk_stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        drop(chunk_stmt);
 
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
@@ -171,7 +209,7 @@ impl ProjectIndex {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if meta.get(&rel) == Some(&mtime) {
+            if meta.get(&rel) == Some(&mtime) && chunk_paths.contains(&rel) {
                 stats.files_unchanged += 1;
                 continue;
             }
@@ -187,6 +225,7 @@ impl ProjectIndex {
             // Replace previous chunks for this file, then add fresh ones.
             writer.delete_term(tantivy::Term::from_field_text(self.f_path, &rel));
             let lines: Vec<&str> = content.lines().collect();
+            let mut file_chunks = Vec::new();
             let step = CHUNK_LINES - CHUNK_OVERLAP;
             let mut start = 0usize;
             loop {
@@ -197,12 +236,14 @@ impl ProjectIndex {
                 doc.add_text(self.f_content, &body);
                 doc.add_u64(self.f_start, (start + 1) as u64);
                 writer.add_document(doc)?;
+                file_chunks.push(((start + 1) as u64, sha256_hex(body.as_bytes())));
                 stats.chunks += 1;
                 if end >= lines.len() {
                     break;
                 }
                 start += step;
             }
+            chunk_updates.push((rel.clone(), file_chunks));
             meta.insert(rel, mtime);
             stats.files_indexed += 1;
         }
@@ -220,6 +261,22 @@ impl ProjectIndex {
 
         writer.commit()?;
         self.reader.reload()?;
+
+        let tx = self.db.transaction()?;
+        for (rel, chunks) in &chunk_updates {
+            tx.execute("DELETE FROM chunks WHERE path = ?1", params![rel])?;
+            for (start_line, hash) in chunks {
+                tx.execute(
+                    "INSERT INTO chunks(path, start_line, content_hash) VALUES (?1, ?2, ?3)",
+                    params![rel, *start_line as i64, hash],
+                )?;
+            }
+        }
+        for rel in &stale {
+            tx.execute("DELETE FROM chunks WHERE path = ?1", params![rel])?;
+        }
+        tx.commit()?;
+
         self.save_meta(&meta)?;
         Ok(stats)
     }
@@ -267,6 +324,214 @@ impl ProjectIndex {
         // Merge duplicate (path, start_line) that can arise from overlap.
         hits.dedup_by(|a, b| a.path == b.path && a.start_line.abs_diff(b.start_line) < CHUNK_OVERLAP as u32);
         Ok(hits)
+    }
+    /// Chunks whose content hash has no embedding for `model` yet. Chunk text
+    /// is reconstructed from the file at query time and verified against the
+    /// stored hash, so a partially-applied edit can never embed stale content.
+    pub fn pending_embeddings(&self, model: &str) -> Result<Vec<PendingChunk>, SearchError> {
+        let mut stmt = self.db.prepare(
+            "SELECT c.path, c.start_line, c.content_hash
+             FROM chunks c
+             LEFT JOIN embeddings e
+               ON e.content_hash = c.content_hash AND e.model = ?1
+             WHERE e.content_hash IS NULL
+             ORDER BY c.path, c.start_line",
+        )?;
+        let rows = stmt
+            .query_map(params![model], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u32,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut pending = Vec::new();
+        for (path, start_line, content_hash) in rows {
+            let full = self.root.join(&path);
+            let Ok(text) = fs::read_to_string(&full) else { continue };
+            let lines: Vec<&str> = text.lines().collect();
+            let lo = start_line.saturating_sub(1) as usize;
+            if lo >= lines.len() {
+                continue;
+            }
+            let hi = (lo + CHUNK_LINES).min(lines.len());
+            let content = lines[lo..hi].join("\n");
+            if sha256_hex(content.as_bytes()) == content_hash {
+                pending.push(PendingChunk {
+                    path,
+                    start_line,
+                    content_hash,
+                    content,
+                });
+            }
+        }
+        Ok(pending)
+    }
+
+    /// Persist embedding vectors keyed by content hash. Model is part of the
+    /// primary key because dimensions and vector spaces are model-specific.
+    pub fn store_embeddings(
+        &mut self,
+        model: &str,
+        embeddings: &[(String, Vec<f32>)],
+    ) -> Result<(), SearchError> {
+        if embeddings.iter().any(|(_, vector)| vector.is_empty()) {
+            return Err(SearchError::InvalidInput("embedding vectors must not be empty".into()));
+        }
+        let tx = self.db.transaction()?;
+        for (hash, vector) in embeddings {
+            tx.execute(
+                "INSERT OR REPLACE INTO embeddings(model, content_hash, dims, vector)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![model, hash, vector.len() as i64, encode_vector(vector)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Exact cosine kNN over cached vectors. Single-project indexes are small
+    /// enough that a linear scan is simpler and more predictable than maintaining
+    /// a mutable approximate graph; embedding cache hits dominate real cost.
+    pub fn vector_search(
+        &self,
+        model: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Hit>, SearchError> {
+        if query_vector.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.db.prepare(
+            "SELECT c.path, c.start_line, e.vector
+             FROM chunks c
+             JOIN embeddings e
+               ON e.content_hash = c.content_hash AND e.model = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![model], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u32,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut hits = Vec::new();
+        for (path, start_line, bytes) in rows {
+            let vector = decode_vector(&bytes);
+            if vector.len() != query_vector.len() {
+                continue;
+            }
+            let score = cosine_similarity(query_vector, &vector);
+            if score > 0.0 {
+                hits.push(Hit {
+                    path,
+                    start_line,
+                    score,
+                    snippet: String::new(),
+                });
+            }
+        }
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(limit);
+        self.fill_snippets(&mut hits);
+        hits.dedup_by(|a, b| a.path == b.path && a.start_line.abs_diff(b.start_line) < CHUNK_OVERLAP as u32);
+        Ok(hits)
+    }
+
+    fn fill_snippets(&self, hits: &mut [Hit]) {
+        for hit in hits {
+            let full = self.root.join(&hit.path);
+            if let Ok(text) = fs::read_to_string(&full) {
+                let lines: Vec<&str> = text.lines().collect();
+                let lo = hit.start_line.saturating_sub(1) as usize;
+                let hi = (lo + 12).min(lines.len());
+                if lo < lines.len() {
+                    hit.snippet = lines[lo..hi].join("\n");
+                }
+            }
+        }
+    }
+}
+
+/// Reciprocal rank fusion for lexical and vector result lists. RRF uses rank
+/// rather than incompatible raw scores (BM25 magnitude vs cosine similarity).
+pub fn reciprocal_rank_fusion(lexical: &[Hit], vector: &[Hit], limit: usize) -> Vec<Hit> {
+    const RRF_K: f32 = 60.0;
+    #[derive(Clone)]
+    struct Acc {
+        hit: Hit,
+        score: f32,
+    }
+    let mut merged: HashMap<(String, u32), Acc> = HashMap::new();
+    for (rank, hit) in lexical.iter().enumerate() {
+        merged.insert(
+            (hit.path.clone(), hit.start_line),
+            Acc {
+                hit: hit.clone(),
+                score: 1.0 / (RRF_K + rank as f32 + 1.0),
+            },
+        );
+    }
+    for (rank, hit) in vector.iter().enumerate() {
+        let key = (hit.path.clone(), hit.start_line);
+        merged
+            .entry(key)
+            .and_modify(|acc| {
+                acc.score += 1.0 / (RRF_K + rank as f32 + 1.0);
+                if acc.hit.snippet.is_empty() {
+                    acc.hit.snippet = hit.snippet.clone();
+                }
+            })
+            .or_insert_with(|| Acc {
+                hit: hit.clone(),
+                score: 1.0 / (RRF_K + rank as f32 + 1.0),
+            });
+    }
+    let mut out = merged.into_values().collect::<Vec<_>>();
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(limit);
+    out.into_iter()
+        .map(|mut acc| {
+            acc.hit.score = acc.score;
+            acc.hit
+        })
+        .collect()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn encode_vector(vector: &[f32]) -> Vec<u8> {
+    vector.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn decode_vector(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for (x, y) in a.iter().zip(b) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
     }
 }
 
@@ -342,6 +607,118 @@ mod tests {
         idx.index_project().unwrap();
         let hits = idx.search("computes totals", 5).unwrap();
         assert!(hits.iter().all(|h| h.path != "README.md"));
+    }
+
+    #[test]
+    fn legacy_tantivy_meta_without_chunk_rows_is_reindexed() {
+        let (tmp, root) = fixture_project();
+        let data = tmp.path().join("data");
+        let mut idx = ProjectIndex::open_or_create(&data, &root).unwrap();
+        idx.index_project().unwrap();
+        // Simulate an index created before vector metadata existed: mtimes say
+        // every file is fresh, but the chunks table is empty.
+        idx.db.execute("DELETE FROM chunks", []).unwrap();
+        idx.index_project().unwrap();
+        assert!(
+            !idx.pending_embeddings("model-a").unwrap().is_empty(),
+            "unchanged legacy files must still populate chunk metadata once"
+        );
+    }
+
+    #[test]
+    fn vector_embeddings_roundtrip_and_ranked_by_cosine() {
+        let (tmp, root) = fixture_project();
+        let data = tmp.path().join("data");
+        let mut idx = ProjectIndex::open_or_create(&data, &root).unwrap();
+        idx.index_project().unwrap();
+        let pending = idx.pending_embeddings("model-a").unwrap();
+        assert!(!pending.is_empty());
+        let embeddings = pending
+            .iter()
+            .map(|chunk| {
+                let vector = if chunk.content.contains("compute_total") {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![0.0, 1.0]
+                };
+                (chunk.content_hash.clone(), vector)
+            })
+            .collect::<Vec<_>>();
+        idx.store_embeddings("model-a", &embeddings).unwrap();
+        let hits = idx.vector_search("model-a", &[1.0, 0.0], 5).unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].path, "src/main.rs");
+        assert!(hits[0].score > 0.99);
+        assert!(hits[0].snippet.contains("compute_total"));
+    }
+
+    #[test]
+    fn embedding_cache_is_per_model_and_survives_incremental_reindex() {
+        let (tmp, root) = fixture_project();
+        let data = tmp.path().join("data");
+        let mut idx = ProjectIndex::open_or_create(&data, &root).unwrap();
+        idx.index_project().unwrap();
+        let pending = idx.pending_embeddings("model-a").unwrap();
+        let embeddings = pending
+            .iter()
+            .map(|chunk| (chunk.content_hash.clone(), vec![1.0, 0.0]))
+            .collect::<Vec<_>>();
+        idx.store_embeddings("model-a", &embeddings).unwrap();
+
+        assert!(idx.pending_embeddings("model-a").unwrap().is_empty());
+        assert!(!idx.pending_embeddings("model-b").unwrap().is_empty());
+
+        idx.index_project().unwrap();
+        assert!(
+            idx.pending_embeddings("model-a").unwrap().is_empty(),
+            "unchanged chunks reuse cached embeddings after reindex"
+        );
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_includes_vector_only_hits() {
+        let lexical = vec![Hit {
+            path: "src/lexical.rs".into(),
+            start_line: 10,
+            score: 8.0,
+            snippet: "lexical".into(),
+        }];
+        let vector = vec![Hit {
+            path: "src/semantic.rs".into(),
+            start_line: 30,
+            score: 0.91,
+            snippet: "semantic".into(),
+        }];
+        let merged = reciprocal_rank_fusion(&lexical, &vector, 5);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|h| h.path == "src/semantic.rs"));
+        assert!(merged.iter().any(|h| h.path == "src/lexical.rs"));
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_boosts_chunks_present_in_both_rankings() {
+        let shared = Hit {
+            path: "src/shared.rs".into(),
+            start_line: 10,
+            score: 8.0,
+            snippet: "shared".into(),
+        };
+        let lexical_only = Hit {
+            path: "src/lexical.rs".into(),
+            start_line: 10,
+            score: 7.0,
+            snippet: "lexical".into(),
+        };
+        let vector_only = Hit {
+            path: "src/semantic.rs".into(),
+            start_line: 30,
+            score: 0.91,
+            snippet: "semantic".into(),
+        };
+        let lexical = vec![shared.clone(), lexical_only];
+        let vector = vec![shared.clone(), vector_only];
+        let merged = reciprocal_rank_fusion(&lexical, &vector, 5);
+        assert_eq!(merged[0].path, "src/shared.rs");
     }
 
     #[test]

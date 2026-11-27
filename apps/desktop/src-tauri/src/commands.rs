@@ -295,7 +295,7 @@ fn memory_tool_defs() -> Vec<providers::ToolDef> {
         },
         providers::ToolDef {
             name: "code_search".into(),
-            description: "Search the project's source code with full-text BM25 ranking. Returns matching file paths, line numbers and content snippets. Use to locate implementations, symbols or usages before reading whole files.".into(),
+            description: "Search the project source with hybrid semantic + BM25 ranking when embeddings are configured, lexical BM25 otherwise. Returns matching file paths, line numbers and content snippets. Use to locate implementations, symbols or usages before reading whole files.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -303,6 +303,44 @@ fn memory_tool_defs() -> Vec<providers::ToolDef> {
                     "limit": { "type": "integer", "description": "Max results, default 8" },
                 },
                 "required": ["query"],
+            }),
+        },
+        providers::ToolDef {
+            name: "goto_definition".into(),
+            description: "Use the project language server to jump to the exact definition of the symbol at a file position. Line and character are one-based. Supports Rust, TypeScript/JavaScript and Python when the language server is installed.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path relative to project root" },
+                    "line": { "type": "integer", "description": "One-based line number" },
+                    "character": { "type": "integer", "description": "One-based character column, default 1" },
+                },
+                "required": ["path", "line"],
+            }),
+        },
+        providers::ToolDef {
+            name: "find_references".into(),
+            description: "Use the project language server to find exact references to the symbol at a file position. Line and character are one-based. Supports Rust, TypeScript/JavaScript and Python when the language server is installed.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path relative to project root" },
+                    "line": { "type": "integer", "description": "One-based line number" },
+                    "character": { "type": "integer", "description": "One-based character column, default 1" },
+                    "include_declaration": { "type": "boolean", "description": "Include the declaration itself, default true" },
+                },
+                "required": ["path", "line"],
+            }),
+        },
+        providers::ToolDef {
+            name: "document_symbols".into(),
+            description: "Use the project language server to list exact symbols in a source file: functions, methods, classes, structs and variables. Supports Rust, TypeScript/JavaScript and Python when the language server is installed.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path relative to project root" },
+                },
+                "required": ["path"],
             }),
         },
         providers::ToolDef {
@@ -325,6 +363,7 @@ async fn execute_code_search_tool(
     data_dir: &Path,
     project_root: &Path,
     call: &providers::ToolCall,
+    embedding: Option<&providers::embeddings::EmbeddingConfig>,
 ) -> ToolResult {
     let query = call.input.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let limit = call.input.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
@@ -335,46 +374,248 @@ async fn execute_code_search_tool(
             is_error: true,
         };
     }
+
     let data = data_dir.to_path_buf();
     let root = project_root.to_path_buf();
-    // tantivy is synchronous; keep indexing off the async runtime threads.
-    let result = tokio::task::spawn_blocking(move || {
+    let embedding_model = embedding.map(|cfg| cfg.model.clone());
+    // tantivy/sqlite are synchronous; keep indexing off the async runtime threads.
+    let prepared = tokio::task::spawn_blocking(move || {
         let mut idx = search::ProjectIndex::open_or_create(&data, &root)
             .map_err(|e| e.to_string())?;
         idx.index_project().map_err(|e| e.to_string())?;
-        idx.search(&query, limit).map_err(|e| e.to_string())
+        match embedding_model {
+            Some(model) => idx.pending_embeddings(&model).map_err(|e| e.to_string()),
+            None => Ok(Vec::new()),
+        }
     })
     .await;
-    match result {
-        Err(e) => ToolResult {
-            tool_call_id: call.id.clone(),
-            content: format!("code_search task failed: {e}"),
-            is_error: true,
-        },
-        Ok(Err(e)) => ToolResult {
-            tool_call_id: call.id.clone(),
-            content: format!("code_search error: {e}"),
-            is_error: true,
-        },
-        Ok(Ok(hits)) if hits.is_empty() => ToolResult {
-            tool_call_id: call.id.clone(),
-            content: "no code matches".into(),
-            is_error: false,
-        },
-        Ok(Ok(hits)) => {
-            let mut out = String::new();
-            for h in hits {
-                out.push_str(&format!(
-                    "### {}:{} (score {:.2})\n```\n{}\n```\n\n",
-                    h.path, h.start_line, h.score, h.snippet
-                ));
-            }
-            ToolResult {
+
+    let pending = match prepared {
+        Err(e) => {
+            return ToolResult {
                 tool_call_id: call.id.clone(),
-                content: out,
-                is_error: false,
+                content: format!("code_search task failed: {e}"),
+                is_error: true,
             }
         }
+        Ok(Err(e)) => {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content: format!("code_search error: {e}"),
+                is_error: true,
+            }
+        }
+        Ok(Ok(pending)) => pending,
+    };
+
+    let mut semantic_error = None;
+    let mut embedded = None;
+    if let Some(cfg) = embedding {
+        let mut seen = std::collections::HashSet::new();
+        let unique_pending = pending
+            .into_iter()
+            .filter(|chunk| seen.insert(chunk.content_hash.clone()))
+            .collect::<Vec<_>>();
+        let mut inputs = unique_pending
+            .iter()
+            .map(|chunk| chunk.content.clone())
+            .collect::<Vec<_>>();
+        inputs.push(query.clone());
+        match providers::embeddings::embed_texts(cfg, &inputs).await {
+            Ok(vectors) if vectors.len() == inputs.len() => {
+                let query_vector = vectors.last().cloned().unwrap_or_default();
+                let pairs = unique_pending
+                    .iter()
+                    .map(|chunk| chunk.content_hash.clone())
+                    .zip(vectors.iter().take(unique_pending.len()).cloned())
+                    .collect::<Vec<_>>();
+                embedded = Some((pairs, query_vector));
+            }
+            Ok(_) => semantic_error = Some("embedding response length mismatch".to_string()),
+            Err(e) => semantic_error = Some(e.to_string()),
+        }
+    }
+
+    let data = data_dir.to_path_buf();
+    let root = project_root.to_path_buf();
+    let model = embedding.map(|cfg| cfg.model.clone());
+    let query_for_search = query.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut idx = search::ProjectIndex::open_or_create(&data, &root)
+            .map_err(|e| e.to_string())?;
+        let lexical = idx.search(&query_for_search, limit).map_err(|e| e.to_string())?;
+        if let (Some(model), Some((pairs, query_vector))) = (model, embedded) {
+            idx.store_embeddings(&model, &pairs).map_err(|e| e.to_string())?;
+            let vector = idx
+                .vector_search(&model, &query_vector, limit)
+                .map_err(|e| e.to_string())?;
+            Ok::<Vec<search::Hit>, String>(search::reciprocal_rank_fusion(&lexical, &vector, limit))
+        } else {
+            Ok::<Vec<search::Hit>, String>(lexical)
+        }
+    })
+    .await;
+
+    let hits = match result {
+        Err(e) => {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content: format!("code_search task failed: {e}"),
+                is_error: true,
+            }
+        }
+        Ok(Err(e)) => {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content: format!("code_search error: {e}"),
+                is_error: true,
+            }
+        }
+        Ok(Ok(hits)) => hits,
+    };
+
+    let mut out = String::new();
+    if let Some(error) = semantic_error {
+        out.push_str(&format!(
+            "[semantic search unavailable: {error}; lexical results only]\n\n"
+        ));
+    }
+    if hits.is_empty() {
+        out.push_str("no code matches");
+    } else {
+        for h in hits {
+            out.push_str(&format!(
+                "### {}:{} (score {:.4})\n```\n{}\n```\n\n",
+                h.path, h.start_line, h.score, h.snippet
+            ));
+        }
+    }
+    ToolResult {
+        tool_call_id: call.id.clone(),
+        content: out,
+        is_error: false,
+    }
+}
+
+fn lsp_tool_error(call: &providers::ToolCall, message: impl Into<String>) -> ToolResult {
+    ToolResult {
+        tool_call_id: call.id.clone(),
+        content: message.into(),
+        is_error: true,
+    }
+}
+
+fn relative_or_full_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
+fn format_lsp_locations(root: &Path, locations: &[lsp::LspLocation]) -> String {
+    locations
+        .iter()
+        .map(|loc| format!("{}:{}:{}", relative_or_full_path(root, &loc.path), loc.line, loc.character))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn symbol_kind_name(kind: u32) -> &'static str {
+    match kind {
+        1 => "file", 2 => "module", 3 => "namespace", 4 => "package",
+        5 => "class", 6 => "method", 7 => "property", 8 => "field",
+        9 => "constructor", 10 => "enum", 11 => "interface", 12 => "function",
+        13 => "variable", 14 => "constant", 15 => "string", 16 => "number",
+        17 => "boolean", 18 => "array", 19 => "object", 20 => "key",
+        21 => "null", 22 => "enum-member", 23 => "struct", 24 => "event",
+        25 => "operator", 26 => "type-parameter",
+        _ => "symbol",
+    }
+}
+
+fn format_lsp_symbols(symbols: &[lsp::LspSymbol]) -> String {
+    symbols
+        .iter()
+        .map(|sym| {
+            let container = sym
+                .container
+                .as_deref()
+                .map(|c| format!(" in {c}"))
+                .unwrap_or_default();
+            format!(
+                "{}:{} {} {}{}",
+                sym.line,
+                sym.character,
+                symbol_kind_name(sym.kind),
+                sym.name,
+                container
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+async fn execute_lsp_tool(
+    manager: &lsp::LspManager,
+    project_root: &Path,
+    call: &providers::ToolCall,
+) -> ToolResult {
+    let rel = call.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if rel.trim().is_empty() {
+        return lsp_tool_error(call, format!("{} requires a file path", call.name));
+    }
+    let path = match executor::resolve_scoped(project_root, rel) {
+        Ok(path) => path,
+        Err(e) => return lsp_tool_error(call, format!("invalid path: {e}")),
+    };
+    let client = match manager.client_for_path(project_root, &path).await {
+        Ok(client) => client,
+        Err(e) => return lsp_tool_error(call, format!("lsp error: {e}")),
+    };
+    let line = call.input.get("line").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let character = call
+        .input
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+
+    let result = match call.name.as_str() {
+        "goto_definition" => {
+            let Some(line) = line else {
+                return lsp_tool_error(call, "goto_definition requires line");
+            };
+            client
+                .goto_definition(&path, line, character)
+                .await
+                .map(|locations| format_lsp_locations(project_root, &locations))
+        }
+        "find_references" => {
+            let Some(line) = line else {
+                return lsp_tool_error(call, "find_references requires line");
+            };
+            let include_declaration = call
+                .input
+                .get("include_declaration")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            client
+                .find_references(&path, line, character, include_declaration)
+                .await
+                .map(|locations| format_lsp_locations(project_root, &locations))
+        }
+        "document_symbols" => client
+            .document_symbols(&path)
+            .await
+            .map(|symbols| format_lsp_symbols(&symbols)),
+        other => return lsp_tool_error(call, format!("unknown lsp tool: {other}")),
+    };
+
+    match result {
+        Ok(text) => ToolResult {
+            tool_call_id: call.id.clone(),
+            content: if text.is_empty() { "(no results)".into() } else { text },
+            is_error: false,
+        },
+        Err(e) => lsp_tool_error(call, format!("lsp error: {e}")),
     }
 }
 
@@ -444,6 +685,7 @@ pub async fn run_step(
     registry: tauri::State<'_, ApprovalRegistry>,
     cancellation: tauri::State<'_, RunCancellation>,
     memory: tauri::State<'_, std::sync::Arc<memory_bridge::MemoryBridge>>,
+    lsp_manager: tauri::State<'_, std::sync::Arc<lsp::LspManager>>,
     input: RunStepInput,
 ) -> Result<(), String> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -603,6 +845,8 @@ pub async fn run_step(
         memory: &'a memory_bridge::MemoryBridge,
         project_key: &'a str,
         data_dir: &'a Path,
+        embedding_config: Option<&'a providers::embeddings::EmbeddingConfig>,
+        lsp: &'a lsp::LspManager,
     }
 
     #[async_trait::async_trait]
@@ -613,8 +857,11 @@ pub async fn run_step(
             if call.name == "memory_search" || call.name == "memory_write_page" {
                 return execute_memory_tool(self.memory, self.project_key, call).await;
             }
+            if matches!(call.name.as_str(), "goto_definition" | "find_references" | "document_symbols") {
+                return execute_lsp_tool(self.lsp, self.project_root, call).await;
+            }
             if call.name == "code_search" {
-                return execute_code_search_tool(self.data_dir, self.project_root, call).await;
+                return execute_code_search_tool(self.data_dir, self.project_root, call, self.embedding_config).await;
             }
             let detail = summarize_tool_call(call);
             let approved = if executor::tool_requires_approval(&call.name, self.mode) {
@@ -716,6 +963,13 @@ pub async fn run_step(
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("aix-memory-fallback"));
+    let embedding_provider = std::env::var("AIX_EMBEDDING_PROVIDER").ok().filter(|v| !v.trim().is_empty());
+    let embedding_model = std::env::var("AIX_EMBEDDING_MODEL").ok().filter(|v| !v.trim().is_empty());
+    let embedding_config = providers::embeddings::resolve_embedding_config(
+        Some(&input.provider_id),
+        embedding_provider.as_deref(),
+        embedding_model.as_deref(),
+    );
     let tauri_executor = TauriExecutor {
         app: &app,
         registry: &registry,
@@ -726,6 +980,8 @@ pub async fn run_step(
         memory: &memory,
         project_key: &project_key,
         data_dir: &search_data_dir,
+        embedding_config: embedding_config.as_ref(),
+        lsp: lsp_manager.inner().as_ref(),
     };
     let loop_config = agent_loop::LoopConfig {
         model: input.model.clone(),
@@ -869,10 +1125,7 @@ fn strip_pseudo_tool_calls(text: &str) -> String {
                 out.push_str(&rest[..start]);
                 match rest[start..].find("</tool_call>") {
                     Some(end) => rest = &rest[start + end + "</tool_call>".len()..],
-                    None => {
-                        rest = "";
-                        break;
-                    }
+                    None => break,
                 }
             }
             None => {
@@ -1030,6 +1283,17 @@ fn uuid_simple() -> String {
 }
 
 #[tauri::command]
+pub async fn close_project_lsp(
+    lsp_manager: tauri::State<'_, std::sync::Arc<lsp::LspManager>>,
+    project_root: String,
+) -> Result<(), String> {
+    lsp_manager
+        .shutdown_project(Path::new(&project_root))
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn list_models(provider_id: String) -> Result<Vec<providers::models::ModelInfo>, String> {
     let client = reqwest::Client::new();
     providers::models::fetch_models(&provider_id, &client)
@@ -1122,6 +1386,161 @@ mod tests {
         )
         .await;
         assert!(res.is_error);
+    }
+
+    async fn embedding_test_server() -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = socket.into_split();
+                    let mut reader = tokio::io::BufReader::new(read_half);
+                    let mut content_len = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).await.unwrap();
+                        if line == "\r\n" || line.is_empty() { break; }
+                        if line.to_ascii_lowercase().starts_with("content-length:") {
+                            content_len = line.split(':').nth(1).unwrap().trim().parse().unwrap();
+                        }
+                    }
+                    let mut body = vec![0u8; content_len];
+                    reader.read_exact(&mut body).await.unwrap();
+                    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    let data = json["input"].as_array().unwrap().iter().enumerate().map(|(i, input)| {
+                        let text = input.as_str().unwrap_or("");
+                        let vector = if text.contains("adding") || text.contains("addition") {
+                            vec![1.0, 0.0]
+                        } else {
+                            vec![0.0, 1.0]
+                        };
+                        serde_json::json!({"index": i, "embedding": vector})
+                    }).collect::<Vec<_>>();
+                    let response = serde_json::json!({"data": data}).to_string();
+                    write_half.write_all(format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        response.len(), response
+                    ).as_bytes()).await.unwrap();
+                });
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn code_search_fixture() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() { println!(\"hello\"); }
+").unwrap();
+        std::fs::write(root.join("src/math.rs"), "pub fn addition(a: i32, b: i32) -> i32 { a + b }
+").unwrap();
+        tmp
+    }
+
+    #[tokio::test]
+    async fn code_search_without_embedding_config_remains_lexical() {
+        let tmp = code_search_fixture();
+        let root = tmp.path().join("proj");
+        let data = tmp.path().join("data");
+        let result = super::execute_code_search_tool(
+            &data,
+            &root,
+            &providers::ToolCall {
+                id: "cs".into(),
+                name: "code_search".into(),
+                input: serde_json::json!({"query": "println"}),
+            },
+            None,
+        ).await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn hybrid_code_search_includes_semantic_hit_without_lexical_match() {
+        let tmp = code_search_fixture();
+        let root = tmp.path().join("proj");
+        let data = tmp.path().join("data");
+        let (base_url, server) = embedding_test_server().await;
+        let cfg = providers::embeddings::EmbeddingConfig {
+            provider_id: "test".into(),
+            model: "embed".into(),
+            base_url,
+            api_key: "key".into(),
+            extra_headers: Default::default(),
+        };
+        let result = super::execute_code_search_tool(
+            &data,
+            &root,
+            &providers::ToolCall {
+                id: "cs".into(),
+                name: "code_search".into(),
+                input: serde_json::json!({"query": "adding numbers"}),
+            },
+            Some(&cfg),
+        ).await;
+        server.abort();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("src/math.rs"), "semantic hit must be present: {}", result.content);
+    }
+
+    #[test]
+    fn lsp_tools_present_in_surface() {
+        let defs = super::memory_tool_defs();
+        let names: Vec<_> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"goto_definition"));
+        assert!(names.contains(&"find_references"));
+        assert!(names.contains(&"document_symbols"));
+    }
+
+    #[tokio::test]
+    async fn lsp_tool_rejects_files_without_a_supported_language() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# docs
+").unwrap();
+        let manager = lsp::LspManager::default();
+        let result = super::execute_lsp_tool(
+            &manager,
+            tmp.path(),
+            &providers::ToolCall {
+                id: "lsp1".into(),
+                name: "document_symbols".into(),
+                input: serde_json::json!({"path": "README.md"}),
+            },
+        ).await;
+        assert!(result.is_error);
+        assert!(result.content.contains("unsupported"), "{}", result.content);
+    }
+
+    #[test]
+    fn lsp_locations_are_rendered_relative_to_project_root() {
+        let root = std::path::Path::new("/project");
+        let locations = vec![lsp::LspLocation {
+            path: std::path::PathBuf::from("/project/src/main.rs"),
+            line: 12,
+            character: 4,
+        }];
+        assert_eq!(super::format_lsp_locations(root, &locations), "src/main.rs:12:4");
+    }
+
+    #[test]
+    fn lsp_symbols_are_rendered_with_kind_and_container() {
+        let symbols = vec![lsp::LspSymbol {
+            name: "inner".into(),
+            kind: 6,
+            line: 3,
+            character: 6,
+            container: Some("outer".into()),
+        }];
+        let rendered = super::format_lsp_symbols(&symbols);
+        assert!(rendered.contains("inner"));
+        assert!(rendered.contains("method"));
+        assert!(rendered.contains("outer"));
+        assert!(rendered.contains("3:6"));
     }
 
     #[test]

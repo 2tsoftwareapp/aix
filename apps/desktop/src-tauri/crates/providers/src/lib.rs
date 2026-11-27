@@ -3,6 +3,7 @@
 
 pub mod anthropic;
 pub mod credentials;
+pub mod embeddings;
 pub mod http;
 pub mod live;
 pub mod models;

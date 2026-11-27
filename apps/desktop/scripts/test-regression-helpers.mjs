@@ -139,6 +139,8 @@ const commandsSource = readFileSync(new URL("../src-tauri/src/commands.rs", impo
   assert.match(commandsSource, /emit\(StepStreamPayload::RunContext/, "backend emits run context before streaming output");
   assert.match(commandsSource, /specify_context_pending/, "specify migration waits until the new feature artifact exists so failed runs keep their prompt in the originating workspace");
   assert.match(commandsSource, /Done \{ feature_slug: Option<String> \}/, "done events report whether a feature artifact was actually committed");
+  assert.match(appSource, /close_project_lsp/, "switching projects shuts down language servers for the previous project");
+  assert.match(commandsSource, /shutdown_project/, "backend exposes project-scoped LSP shutdown");
 }
 
 const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");

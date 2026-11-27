@@ -68,10 +68,15 @@ export function App() {
   }, []);
 
   const openProject = useCallback((path: string) => {
+    if (projectRoot && projectRoot !== path) {
+      void invoke("close_project_lsp", { projectRoot }).catch((error) => {
+        console.warn("LSP shutdown failed", error);
+      });
+    }
     addRecent(path);
     setActiveFeature(null);
     setProjectRoot(path);
-  }, []);
+  }, [projectRoot]);
 
   const openProjectPicker = useCallback(async () => {
     try {

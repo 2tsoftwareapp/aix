@@ -111,7 +111,6 @@ where
                     break;
                 }
                 Ok(StreamEvent::Error { message }) => {
-                    saw_terminal = true;
                     return Err(LoopError::Provider(ProviderError::StreamInterrupted(message)));
                 }
                 Err(e) => return Err(LoopError::Provider(e)),

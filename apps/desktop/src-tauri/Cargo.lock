@@ -156,6 +156,7 @@ dependencies = [
  "async-trait",
  "executor",
  "futures-util",
+ "lsp",
  "memory-bridge",
  "providers",
  "reqwest 0.12.28",
@@ -3092,6 +3093,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lsp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "lz4_flex"
 version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4788,6 +4801,7 @@ name = "search"
 version = "0.1.0"
 dependencies = [
  "ignore",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -8,6 +8,7 @@ members = [
     "crates/agent-loop",
     "crates/memory-bridge",
     "crates/search",
+    "crates/lsp",
 ]
 resolver = "2"
 
@@ -49,6 +50,7 @@ agent-loop = { path = "crates/agent-loop" }
 app-state = { path = "crates/app-state" }
 memory-bridge = { path = "crates/memory-bridge" }
 search = { path = "crates/search" }
+lsp = { path = "crates/lsp" }
 tauri-plugin-dialog = "2.8.4"
 similar = "3.2.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
