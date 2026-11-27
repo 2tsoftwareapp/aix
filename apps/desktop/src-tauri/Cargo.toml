@@ -7,6 +7,7 @@ members = [
     "crates/app-state",
     "crates/agent-loop",
     "crates/memory-bridge",
+    "crates/search",
 ]
 resolver = "2"
 
@@ -47,6 +48,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 agent-loop = { path = "crates/agent-loop" }
 app-state = { path = "crates/app-state" }
 memory-bridge = { path = "crates/memory-bridge" }
+search = { path = "crates/search" }
 tauri-plugin-dialog = "2.8.4"
 similar = "3.2.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

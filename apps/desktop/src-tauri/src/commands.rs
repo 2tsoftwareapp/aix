@@ -13,7 +13,7 @@ use speckit_core::gates::{evaluate, GateVerdict};
 use speckit_core::runner::{ArtifactContext, StepRunner};
 use speckit_core::{PipelineState, Step, TemplateStore};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Serialize)]
 pub struct GateInfo {
@@ -294,6 +294,18 @@ fn memory_tool_defs() -> Vec<providers::ToolDef> {
             }),
         },
         providers::ToolDef {
+            name: "code_search".into(),
+            description: "Search the project's source code with full-text BM25 ranking. Returns matching file paths, line numbers and content snippets. Use to locate implementations, symbols or usages before reading whole files.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "description": "Max results, default 8" },
+                },
+                "required": ["query"],
+            }),
+        },
+        providers::ToolDef {
             name: "memory_write_page".into(),
             description: "Save durable knowledge to the project's long-term memory: decisions, non-obvious constraints, lessons worth recalling in future sessions. Path is a slash-separated key, e.g. decisions/database-choice. Do NOT use for transient task progress.".into(),
             input_schema: json!({
@@ -307,6 +319,63 @@ fn memory_tool_defs() -> Vec<providers::ToolDef> {
             }),
         },
     ]
+}
+
+async fn execute_code_search_tool(
+    data_dir: &Path,
+    project_root: &Path,
+    call: &providers::ToolCall,
+) -> ToolResult {
+    let query = call.input.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let limit = call.input.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+    if query.trim().is_empty() {
+        return ToolResult {
+            tool_call_id: call.id.clone(),
+            content: "code_search requires a non-empty query".into(),
+            is_error: true,
+        };
+    }
+    let data = data_dir.to_path_buf();
+    let root = project_root.to_path_buf();
+    // tantivy is synchronous; keep indexing off the async runtime threads.
+    let result = tokio::task::spawn_blocking(move || {
+        let mut idx = search::ProjectIndex::open_or_create(&data, &root)
+            .map_err(|e| e.to_string())?;
+        idx.index_project().map_err(|e| e.to_string())?;
+        idx.search(&query, limit).map_err(|e| e.to_string())
+    })
+    .await;
+    match result {
+        Err(e) => ToolResult {
+            tool_call_id: call.id.clone(),
+            content: format!("code_search task failed: {e}"),
+            is_error: true,
+        },
+        Ok(Err(e)) => ToolResult {
+            tool_call_id: call.id.clone(),
+            content: format!("code_search error: {e}"),
+            is_error: true,
+        },
+        Ok(Ok(hits)) if hits.is_empty() => ToolResult {
+            tool_call_id: call.id.clone(),
+            content: "no code matches".into(),
+            is_error: false,
+        },
+        Ok(Ok(hits)) => {
+            let mut out = String::new();
+            for h in hits {
+                out.push_str(&format!(
+                    "### {}:{} (score {:.2})\n```\n{}\n```\n\n",
+                    h.path, h.start_line, h.score, h.snippet
+                ));
+            }
+            ToolResult {
+                tool_call_id: call.id.clone(),
+                content: out,
+                is_error: false,
+            }
+        }
+    }
 }
 
 async fn execute_memory_tool(
@@ -533,6 +602,7 @@ pub async fn run_step(
         denylist: &'a [String],
         memory: &'a memory_bridge::MemoryBridge,
         project_key: &'a str,
+        data_dir: &'a Path,
     }
 
     #[async_trait::async_trait]
@@ -542,6 +612,9 @@ pub async fn run_step(
             // project — they bypass approval gates by design.
             if call.name == "memory_search" || call.name == "memory_write_page" {
                 return execute_memory_tool(self.memory, self.project_key, call).await;
+            }
+            if call.name == "code_search" {
+                return execute_code_search_tool(self.data_dir, self.project_root, call).await;
             }
             let detail = summarize_tool_call(call);
             let approved = if executor::tool_requires_approval(&call.name, self.mode) {
@@ -639,6 +712,10 @@ pub async fn run_step(
         }
     }
 
+    let search_data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("aix-memory-fallback"));
     let tauri_executor = TauriExecutor {
         app: &app,
         registry: &registry,
@@ -648,6 +725,7 @@ pub async fn run_step(
         denylist: &denylist,
         memory: &memory,
         project_key: &project_key,
+        data_dir: &search_data_dir,
     };
     let loop_config = agent_loop::LoopConfig {
         model: input.model.clone(),
